@@ -196,7 +196,7 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
 .mbtn[aria-current="true"] { border-color: var(--green); }
 
 /* Toast */
-.toast { position: absolute; left: 14px; right: 14px; bottom: 92px; background: var(--ink); color: #fff; border-radius: 14px; padding: 12px 14px; font-weight: 700; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.toast { position: absolute; left: 14px; right: 14px; top: 68px; background: var(--ink); color: #fff; border-radius: 14px; padding: 12px 14px; font-weight: 700; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
 .toast b { font-family: var(--font-display); font-size: 20px; font-weight: 600; color: #BFE3BA; }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -207,6 +207,20 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
 }
 
 /* ---------- Ergänzungen der echten App ---------- */
+.start.login { position: relative; padding-top: 24px; }
+.start.login .corner { width: 120px; max-width: 34%; align-self: flex-start; }
+.start.login .apptitle { font-size: 40px; line-height: 1.1; color: var(--green-dark); margin: 28px 0 12px; }
+.info-msg { background: var(--amber-soft); color: var(--amber); border-radius: 10px; padding: 10px 12px; font-weight: 700; margin: 0; }
+.whoami { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-weight: 700; font-size: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.whoami .mini-btn { margin: 0; }
+.katform { display: flex; gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.katform input { border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 16px; min-width: 0; flex: 1; }
+.katform .small-in { flex: 0 0 56px; }
+.katform input[type=color] { flex: 0 0 44px; height: 40px; padding: 2px; }
+.katform .mini-btn { margin: 0; }
+.swatch { width: 28px; height: 28px; border-radius: 8px; flex: none; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; padding-bottom: 0; }
+
 .person { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
 .useractions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .pinin { width: 110px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 16px; }
