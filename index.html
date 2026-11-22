@@ -200,51 +200,13 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
 .toast b { font-family: var(--font-display); font-size: 20px; font-weight: 600; color: #BFE3BA; }
 
 @media (prefers-reduced-motion: no-preference) {
-  .sheet.anim { animation: up .22s ease-out; }
-  .toast.anim { animation: fade .2s ease-out; }
+  .sheet { animation: up .22s ease-out; }
+  .toast { animation: fade .2s ease-out; }
   @keyframes up { from { transform: translateY(30px); opacity: .4; } to { transform: none; opacity: 1; } }
   @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 }
 
 /* ---------- Ergänzungen der echten App ---------- */
-.person { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
-.useractions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.pinin { width: 110px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 16px; }
-.plist { display: flex; flex-direction: column; }
-.prow { display: flex; align-items: center; gap: 12px; padding: 8px 2px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; width: 100%; }
-.prow .thumb { width: 56px; height: 42px; border-radius: 8px; overflow: hidden; display: grid; place-items: center; color: #fff; font-family: var(--font-display); font-weight: 600; flex: none; }
-.prow .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.prow .pn { flex: 1; min-width: 0; }
-.prow .pn b { display: block; font-size: 15px; }
-.prow .pn small { color: var(--muted); font-size: 13px; }
-.prow > .num { font-weight: 800; }
-.formrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
-.formrow .field, .formrow input, .formrow select { min-width: 0; width: 100%; }
-.imgedit { display: flex; gap: 12px; align-items: center; }
-.imgedit img, .imgedit .ph { width: 160px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; background: var(--bg); display: grid; place-items: center; color: var(--muted); font-size: 13px; border: 1px dashed var(--line); }
-.filebtn { font-size: 14px; padding: 10px 14px; cursor: pointer; }
-.thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
-.tb { position: relative; width: 84px; height: 63px; border-radius: 10px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); display: grid; place-items: center; font-size: 11px; color: var(--muted); text-align: center; padding: 2px; }
-.tb img { width: 100%; height: 100%; object-fit: cover; }
-.tb.new { border: 2px solid var(--green); }
-.tb button { position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; border-radius: 999px; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 16px; line-height: 24px; padding: 0; }
-.tb.add { border: 2px dashed var(--green); color: var(--green); font-weight: 800; font-size: 14px; cursor: pointer; }
-
-.neg { color: var(--blue) !important; }
-.due.payout { background: var(--blue-soft); border: 2px solid var(--blue); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 2px; }
-.due.payout small, .due.payout b, .due.payout span { color: var(--blue); }
-.due.payout small { text-transform: uppercase; letter-spacing: .06em; font-weight: 800; }
-.due.payout span { font-weight: 700; font-size: 14px; }
-.btn.payout { background: var(--blue); }
-.bar .sum.payout { background: var(--blue-soft); border-color: var(--blue); }
-.bar .sum.payout small, .bar .sum.payout b { color: var(--blue); }
-.cash { grid-template-columns: repeat(3, 1fr); }
-.cash button { position: relative; }
-.cash .cnt { position: absolute; top: -6px; right: -4px; background: var(--blue); color: #fff; font-size: 12px; font-weight: 800; border-radius: 999px; padding: 2px 7px; }
-.givenrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
-.mini-btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 10px; font-weight: 700; font-size: 13px; margin-left: 6px; }
-.toast .neg-t { color: #A9C8F5; }
-
 .cell { position: relative; display: flex; }
 .cell .tile { width: 100%; }
 .tile .pic { position: relative; overflow: hidden; }
