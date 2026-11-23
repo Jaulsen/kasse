@@ -4,7 +4,7 @@
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
 const DEMO = !API;
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.0.1';
 const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
@@ -149,6 +149,7 @@ async function sync() {
   if (net.syncing) { net.again = true; return; }
   if (!S.user && !S.queue.length) return;
   net.syncing = true; paintChip();
+  if (S.user && !D) render();
   let changed = false;
   try {
     while (S.queue.length) {
@@ -170,10 +171,10 @@ async function sync() {
     save();
     loadImages();
   } catch (e) {
-    S.letzterFehler = String(e.message || e); save();
+    S.letzterFehler = (e.name === 'AbortError' ? 'Zeitüberschreitung' : String(e.message || e)); save();
   } finally {
     net.syncing = false;
-    softRender(changed || ['queue', 'bons'].includes(ui.overlay));
+    softRender(changed || !D || ['queue', 'bons'].includes(ui.overlay));
     if (net.again) { net.again = false; setTimeout(sync, 50); }
   }
 }
@@ -184,6 +185,7 @@ function applyStamm(st) {
     else throw new Error(st.fehler);
     return;
   }
+  if (!st.version || String(st.version).charAt(0) !== '2') throw new Error('Schnittstelle ist noch Version ' + (st.version || '1.x'));
   if (st.benutzer) Object.assign(S.user, { rolle: st.benutzer.rolle, status: st.benutzer.status, name: st.benutzer.name });
   if (!st.benutzer || st.benutzer.status !== 'aktiv') return;
   if (!(st.unveraendert && D)) {
@@ -350,6 +352,7 @@ async function login(name, pin) {
   catch (e) { ui.busy = false; return renderStart('Kein Netz.'); }
   ui.busy = false;
   if (!r.ok) return renderStart(r.fehler);
+  if (!r.benutzer.status) return renderStart('Schnittstelle ist noch Version 1.x');
   angemeldet(r.benutzer);
 }
 function angemeldet(b) {
@@ -411,7 +414,7 @@ function renderInfo(text) {
 }
 function renderErsteDaten() {
   app.innerHTML = `<div class="screen"><div class="start">${loginKopf()}
-    ${net.syncing ? ladeHtml : `<p class="err">${esc(S.letzterFehler || 'Keine Verbindung')}</p><button class="btn wide" id="rt">Erneut</button>`}
+    ${net.syncing || (!S.letzterFehler && !S.letzterAbgleich) ? ladeHtml : `<p class="err">${esc(S.letzterFehler || 'Keine Daten')}</p><button class="btn wide" id="rt">Erneut</button>`}
     <div class="whoami"><span>${esc(S.user.name)}</span><button class="mini-btn" id="lo">Abmelden</button></div></div></div>`;
   const rt = document.getElementById('rt'); if (rt) rt.addEventListener('click', () => sync());
   document.getElementById('lo').addEventListener('click', logout);
