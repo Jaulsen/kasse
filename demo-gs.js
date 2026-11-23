@@ -2,14 +2,14 @@
 window.__GS = (function () {
 /**
  * Weihnachtsmarkt-Kasse – Google-Schnittstelle
- * Version 2.0 · 2026-11-23
+ * Version 2.1 · 2026-11-24
  *
  * Gehört in das Apps-Script-Projekt am Google Sheet (Erweiterungen › Apps Script).
  * Fehlende Tabs und Spalten legt die Schnittstelle selbst an; ein Sheet aus
  * Version 1.x wird beim ersten Aufruf automatisch umgestellt (Märkte › Stände).
  */
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 const TZ = 'Europe/Berlin';
 const MAX_DATEI_BYTES = 350000;
 const PUFFER_MIN = 30;
@@ -173,10 +173,13 @@ function neueId_(t, spalte, praefix) {
   const n = max + 1;
   return praefix + (n < 100 ? ('00' + n).slice(-3) : String(n));
 }
+let sperreTiefe_ = 0;
 function sperre_(fn) {
+  if (sperreTiefe_) return fn();
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
-  try { return fn(); } finally { lock.releaseLock(); }
+  sperreTiefe_++;
+  try { return fn(); } finally { sperreTiefe_--; lock.releaseLock(); }
 }
 
 /* ===================================================================
@@ -358,7 +361,7 @@ function registrieren_(p) {
 function platzhalterVerknuepfen_(id, name) {
   const s = tab_('Schichten');
   s.zeilen.forEach(function (z) {
-    if (!txt_(z.benutzer_id) && name_(z.platzhalter).toLowerCase() === name.toLowerCase() && txt_(z.status) === 'geplant') {
+    if (!txt_(z.benutzer_id) && name_(z.platzhalter).toLowerCase() === name.toLowerCase() && txt_(z.status) === 'geplant' && !ueberschneidung_(id, tag_(z.datum), uhr_(z.von), uhr_(z.bis), z.schicht_id)) {
       setzen_(s, z, 'benutzer_id', id); setzen_(s, z, 'status', 'verknuepfung');
     }
   });
@@ -492,9 +495,20 @@ function stammdaten_(p) {
   const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(daten), Utilities.Charset.UTF_8)
     .map(function (x) { return ('0' + (x & 255).toString(16)).slice(-2); }).join('');
   const kopf = { ok: true, version: VERSION, heute: heute_(), hash: hash, benutzer: benutzerInfo_(b), zugang: zugangFuer_(b, p.geraet_id), rechte: rechteFuer_(b),
-    hinweise: rang_(b) >= 2 ? hinweisListe_(b).length : 0 };
+    hinweise: rang_(b) >= 2 ? hinweisListe_(b) : [], schichten: schichtenFuer_(b, staende) };
+  if (kopf.rechte.staende.length) kopf.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv'; })
+    .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z) }; }).sort(function (a, c) { return a.name.localeCompare(c.name); });
   if (p.hash && p.hash === hash) return Object.assign(kopf, { unveraendert: true });
   return Object.assign(kopf, daten);
+}
+
+function schichtenFuer_(b, staende) {
+  const sichtbar = {}, namen = namen_(), ab = Utilities.formatDate(new Date(Date.now() - 864e5), TZ, 'yyyy-MM-dd');
+  staende.forEach(function (s) { sichtbar[s.stand_id] = true; });
+  return tab_('Schichten').zeilen.filter(function (z) { return sichtbar[txt_(z.stand_id)] && tag_(z.datum) >= ab && (txt_(z.status) !== 'abgelehnt' || standRecht_(b, z.stand_id)); }).map(function (z) {
+    return { schicht_id: txt_(z.schicht_id), stand_id: txt_(z.stand_id), datum: tag_(z.datum), von: uhr_(z.von), bis: uhr_(z.bis), aufgabe: txt_(z.aufgabe),
+      benutzer_id: txt_(z.benutzer_id), name: txt_(z.benutzer_id) ? (namen[txt_(z.benutzer_id)] || '?') : name_(z.platzhalter), platzhalter: !txt_(z.benutzer_id), status: txt_(z.status) || 'geplant' };
+  });
 }
 
 function dateien_(p) {
@@ -527,6 +541,7 @@ function sync_(p) {
         else if (en.typ === 'Storno') stornieren_(d, bid);
         else if (en.typ === 'Verfuegbarkeit') verfuegbarkeitSetzen_(d, bid);
         else if (en.typ === 'Rueckmeldung') rueckmeldungSpeichern_(d);
+        else if (en.typ === 'Aktion') aktionAusfuehren_(d, bid, p.geraet_id);
         else if (en.typ === 'Benutzer') { /* alte App-Versionen: ignorieren */ }
         else throw new Error('Unbekannter Eintrag: ' + en.typ);
         erledigt.push(en.id);
@@ -537,6 +552,14 @@ function sync_(p) {
     SpreadsheetApp.flush();
     return { ok: true, erledigt: erledigt, fehler: fehler };
   });
+}
+
+/* Aktionen, die die App ohne Warten in die Warteschlange stellt */
+const WARTESCHLANGE = ['hinweis_aktion', 'schicht_speichern', 'schicht_loeschen', 'rueckmeldung_status', 'benutzer_aendern', 'preis_speichern', 'zustaendigkeit'];
+function aktionAusfuehren_(d, benutzerId, geraetId) {
+  if (WARTESCHLANGE.indexOf(d.aktion) < 0) throw new Error('Aktion nicht erlaubt: ' + d.aktion);
+  const r = AKTIONEN[d.aktion](Object.assign({}, d, { benutzer_id: benutzerId, geraet_id: geraetId }));
+  if (!r || !r.ok) throw new Error((r && r.fehler) || 'Fehler');
 }
 
 function bonSpeichern_(d) {
@@ -701,6 +724,19 @@ function plan_(p) {
   }
   return out;
 }
+function ueberschneidung_(benutzerId, datum, von, bis, ausser) {
+  if (!benutzerId) return null;
+  return tab_('Schichten').zeilen.filter(function (z) {
+    return txt_(z.benutzer_id) === txt_(benutzerId) && txt_(z.schicht_id) !== txt_(ausser) && tag_(z.datum) === datum &&
+      ['abgelehnt'].indexOf(txt_(z.status)) < 0 && minuten_(uhr_(z.von)) < minuten_(bis) && minuten_(uhr_(z.bis)) > minuten_(von);
+  })[0] || null;
+}
+function ueberschneidungPruefen_(benutzerId, datum, von, bis, ausser) {
+  const z = ueberschneidung_(benutzerId, datum, von, bis, ausser);
+  if (!z) return;
+  const s = stand_(z.stand_id);
+  throw new Error((namen_()[txt_(benutzerId)] || 'Person') + ' ist ' + uhr_(z.von) + '–' + uhr_(z.bis) + ' schon eingeteilt' + (s ? ' (' + txt_(s.name) + ')' : '') + '.');
+}
 function schichtSpeichern_(p) {
   const b = auth_(p);
   const d = p.schicht || {};
@@ -722,11 +758,12 @@ function schichtSpeichern_(p) {
     const werte = { stand_id: d.stand_id, datum: alsText_(txt_(d.datum)), von: alsText_(uhr_(d.von)), bis: alsText_(uhr_(d.bis)), aufgabe: txt_(d.aufgabe), benutzer_id: benutzerId, platzhalter: platzhalter, status: status };
     let z = txt_(d.schicht_id) ? t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(d.schicht_id); })[0] : null;
     if (z && !leitung && txt_(z.benutzer_id) !== txt_(b.benutzer_id)) throw new Error('Keine Berechtigung.');
+    ueberschneidungPruefen_(benutzerId, txt_(d.datum), uhr_(d.von), uhr_(d.bis), d.schicht_id);
     if (z) Object.keys(werte).forEach(function (k) { setzen_(t, z, k, werte[k]); });
-    else z = anhaengen_(t, [Object.assign({ schicht_id: Utilities.getUuid().slice(0, 8), erstellt_von: txt_(b.benutzer_id) }, werte)])[0];
+    else z = anhaengen_(t, [Object.assign({ schicht_id: txt_(d.schicht_id) || Utilities.getUuid().slice(0, 8), erstellt_von: txt_(b.benutzer_id) }, werte)])[0];
     if (platzhalter && !benutzerId) {
       const treffer = tab_('Benutzer').zeilen.filter(function (x) { return name_(x.name).toLowerCase() === platzhalter.toLowerCase() && status_(x) === 'aktiv'; })[0];
-      if (treffer) { setzen_(t, z, 'benutzer_id', txt_(treffer.benutzer_id)); setzen_(t, z, 'status', 'verknuepfung'); }
+      if (treffer && !ueberschneidung_(treffer.benutzer_id, txt_(d.datum), uhr_(d.von), uhr_(d.bis), z.schicht_id)) { setzen_(t, z, 'benutzer_id', txt_(treffer.benutzer_id)); setzen_(t, z, 'status', 'verknuepfung'); }
     }
     return { ok: true, schicht_id: txt_(z.schicht_id) };
   });
@@ -736,7 +773,7 @@ function schichtLoeschen_(p) {
   return sperre_(function () {
     const t = tab_('Schichten');
     const z = t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(p.schicht_id); })[0];
-    if (!z) throw new Error('Schicht nicht gefunden.');
+    if (!z) return { ok: true };
     const eigenerVorschlag = txt_(z.benutzer_id) === txt_(b.benutzer_id) && txt_(z.status) === 'vorgeschlagen';
     if (!eigenerVorschlag) standPruefen_(b, z.stand_id);
     loeschen_(t, z);
@@ -778,7 +815,7 @@ function hinweisListe_(b) {
     if (st !== 'vorgeschlagen' && st !== 'verknuepfung') return;
     out.push({ typ: st === 'vorgeschlagen' ? 'schicht' : 'verknuepfung', id: txt_(z.schicht_id),
       titel: (namen[txt_(z.benutzer_id)] || '') + ' · ' + txt_(z.aufgabe),
-      text: (st === 'vorgeschlagen' ? 'Schichtvorschlag ' : 'Platzhalter „' + name_(z.platzhalter) + '“ ') + tag_(z.datum) + ' ' + uhr_(z.von) + '–' + uhr_(z.bis),
+      text: (st === 'vorgeschlagen' ? 'Vorschlag ' : 'Platzhalter „' + name_(z.platzhalter) + '“ · ') + tag_(z.datum).split('-').reverse().slice(0, 2).join('.') + '. ' + uhr_(z.von) + '–' + uhr_(z.bis),
       stand: standName[txt_(z.stand_id)] });
   });
   // Produktvorschläge
@@ -825,7 +862,7 @@ function hinweisAktion_(p) {
       const z = t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(p.id); })[0];
       if (!z) throw new Error('Nicht gefunden.');
       standPruefen_(b, z.stand_id);
-      if (ja) setzen_(t, z, 'status', 'geplant');
+      if (ja) { ueberschneidungPruefen_(z.benutzer_id, tag_(z.datum), uhr_(z.von), uhr_(z.bis), z.schicht_id); setzen_(t, z, 'status', 'geplant'); }
       else if (p.typ === 'schicht') setzen_(t, z, 'status', 'abgelehnt');
       else { setzen_(t, z, 'benutzer_id', ''); setzen_(t, z, 'status', 'geplant'); }
     } else if (p.typ === 'produkt') {

@@ -1,7 +1,7 @@
 /* Service Worker: hält die App-Dateien für den Offline-Betrieb bereit.
    Mit Netz wird immer zuerst die aktuelle Version geholt, ohne Netz die gespeicherte. */
-const CACHE = 'kasse-v2.0.1';
-const DATEIEN = ['./', 'index.html', 'app.js', 'leitung.js', 'verwaltung.js', 'config.js', 'manifest.webmanifest', 'logo.png', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'kasse-v2.1';
+const DATEIEN = ['./', 'index.html', 'app.js', 'seiten.js', 'verwaltung.js', 'config.js', 'manifest.webmanifest', 'logo.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(DATEIEN)).then(() => self.skipWaiting()));

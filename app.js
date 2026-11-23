@@ -1,10 +1,10 @@
-/* Weihnachtsmarkt-Kasse · App 2.0 · Kern, Anmeldung, Kasse */
+/* Weihnachtsmarkt-Kasse · App 2.1 · Kern: Zustand, Abgleich, Rahmen, Seitenleiste, Kasse */
 'use strict';
 
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
 const DEMO = !API;
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.1';
 const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
@@ -51,9 +51,10 @@ let S = Object.assign(defaultState(), lsGet(KEY_STATE) || {});
   lsSet(KEY_STATE, S);
 })();
 let D = lsGet(KEY_DATA);
-let ui = { overlay: null, animDone: null, toast: null, toastNew: false, busy: false, kat: 'Alle', q: '', payGiven: null, payParts: [], payInput: '', confirm: null, msg: null, loginMsg: null };
+let ui = { page: null, drawer: false, acc: null, overlay: null, animDone: null, toast: null, toastNew: false, busy: false, kat: 'Alle', q: '', payGiven: null, payParts: [], payInput: '', confirm: null, msg: null, loginMsg: null };
 let net = { syncing: false, ok: null };
-const OV = {};   // Overlays: { titel(), body(), footer(), bind(root), screen }
+const OV = {};   // Fenster über der Kasse (Warenkorb, Bezahlen, Info): { titel, body, footer, bind }
+const P = {};    // Seiten: { titel, eltern, body, leiste, bind, open, form }
 
 function save() { S.bons = S.bons.slice(-300); S.fehlerlog = (S.fehlerlog || []).slice(-30); lsSet(KEY_STATE, S); }
 function keepDevice() { return { geraet_id: S.geraet_id, queue: S.queue, fehlerlog: S.fehlerlog, letzterAbgleich: S.letzterAbgleich, anzeige: S.anzeige }; }
@@ -70,7 +71,8 @@ const prod = pid => PRODS().find(p => p.produkt_id === pid);
 const standName = id => { const s = stand(id); return s ? s.name : ''; };
 const role = () => (S.user && S.user.rolle) || 'Helfer';
 const rang = () => ROLLEN[role()] || 1;
-const leitet = (sid = S.stand_id) => !!(D && D.rechte && D.rechte.staende.includes(sid));
+const leitet = (sid = S.stand_id) => !!(sid && D && D.rechte && D.rechte.staende.includes(sid));
+const hinweisZahl = () => ((D && Array.isArray(D.hinweise)) ? D.hinweise.length : 0);
 const online = () => net.ok !== false;
 const needsCode = sid => !leitet(sid) && (S.zugang || {})[sid] !== today();
 
@@ -106,11 +108,12 @@ const cartTotal = () => cartLines().reduce((a, l) => a + l.summe, 0);
 const cartCount = () => cartLines().reduce((a, l) => a + l.menge, 0);
 const imgUrl = (ordner, name) => { const x = IMG[ordner + ':' + name]; return x ? x.url : (DEMO && window.KASSE_DEMO && window.KASSE_DEMO.bilder[name]) || ''; };
 
+
 /* ---------- Schnittstelle ---------- */
 async function api(params, post) {
   const p = Object.assign({ benutzer_id: S.user ? S.user.benutzer_id : '', geraet_id: S.geraet_id }, params);
   if (DEMO) {
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise(r => setTimeout(r, window.DEMO_LATENZ || 150));
     if (window.DEMO_NETZ === false) { net.ok = false; throw new TypeError('offline'); }
     net.ok = true;
     return window.DEMO_SERVER.call(p, post);
@@ -137,17 +140,53 @@ async function call(params, post) {
   catch (e) { toast(net.ok === false ? 'Kein Netz' : esc(e.message)); return { ok: false }; }
 }
 
-function enqueue(typ, data) {
-  S.queue.push({ id: uid(), typ, data, benutzer_id: S.user ? S.user.benutzer_id : '', t: Date.now() });
-  save();
-  clearTimeout(enqueue.t);
-  enqueue.t = setTimeout(sync, 1000);
+/* Knopf sperren, solange eine Anfrage läuft: kein doppeltes Auslösen */
+async function tue(btn, fn) {
+  if (!btn || btn.dataset.busy) return;
+  btn.dataset.busy = '1'; btn.classList.add('busy'); btn.disabled = true;
+  try { await fn(); } finally { if (btn.isConnected) { delete btn.dataset.busy; btn.classList.remove('busy'); btn.disabled = false; } }
 }
 
+/* Warteschlange: alles, was nicht auf die Antwort warten muss, wirkt sofort und wird im Hintergrund übertragen */
+function enqueue(typ, data) {
+  const en = { id: uid(), typ, data, benutzer_id: S.user ? S.user.benutzer_id : '', t: Date.now() };
+  S.queue.push(en);
+  lokal(en);
+  save();
+  clearTimeout(enqueue.t);
+  enqueue.t = setTimeout(sync, 400);
+}
+const aktion = (name, data) => enqueue('Aktion', Object.assign({ aktion: name }, data));
+
+/* Wirkung einer Aktion sofort auf die lokalen Daten anwenden */
+function lokal(en) {
+  if (!D || en.typ !== 'Aktion') return;
+  const d = en.data;
+  if (d.aktion === 'schicht_speichern') {
+    const s = d.schicht, l = D.schichten || (D.schichten = []);
+    const i = l.findIndex(x => x.schicht_id === s.schicht_id);
+    const pers = (D.personen || []).find(p => p.benutzer_id === s.benutzer_id);
+    const neu = Object.assign({}, i >= 0 ? l[i] : {}, s, {
+      name: s.benutzer_id ? (pers ? pers.name : S.user.name) : s.platzhalter, platzhalter: !s.benutzer_id,
+      status: leitet(s.stand_id) ? 'geplant' : 'vorgeschlagen', lokal: true });
+    if (i >= 0) l[i] = neu; else l.push(neu);
+  } else if (d.aktion === 'schicht_loeschen') {
+    D.schichten = (D.schichten || []).filter(x => x.schicht_id !== d.schicht_id);
+  } else if (d.aktion === 'hinweis_aktion') {
+    D.hinweise = (D.hinweise || []).filter(h => !(h.typ === d.typ && h.id === d.id));
+    if (d.typ === 'schicht' || d.typ === 'verknuepfung') {
+      const s = (D.schichten || []).find(x => x.schicht_id === d.id);
+      if (s) { if (d.aktion2 === 'ja') s.status = 'geplant'; else if (d.typ === 'schicht') s.status = 'abgelehnt'; else { s.status = 'geplant'; s.benutzer_id = ''; s.platzhalter = true; } }
+    }
+    if (d.typ === 'ausverkauft' && d.aktion2 === 'nein') { const [sid, pid] = d.id.split('|'); D.verfuegbarkeit = (D.verfuegbarkeit || []).filter(v => !(v.stand_id === sid && v.produkt_id === pid)); }
+  }
+}
+const wartet = id => S.queue.some(q => q.typ === 'Aktion' && ((q.data.schicht && q.data.schicht.schicht_id === id) || q.data.schicht_id === id));
+
 async function sync() {
-  const angemeldet = S.user && S.user.status === 'aktiv';
   if (net.syncing) { net.again = true; return; }
   if (!S.user && !S.queue.length) return;
+  const angemeldet = S.user && S.user.status === 'aktiv';
   net.syncing = true; paintChip();
   if (S.user && !D) render();
   let changed = false;
@@ -157,16 +196,21 @@ async function sync() {
       const r = await api({ aktion: 'sync', eintraege: batch }, true);
       if (!r.ok) throw new Error(r.fehler || 'Abgleich abgelehnt');
       const done = new Set(r.erledigt || []);
-      (r.fehler || []).forEach(f => { done.add(f.id); S.fehlerlog.push({ zeit: new Date().toISOString(), typ: f.typ, fehler: f.fehler }); });
+      (r.fehler || []).forEach(f => {
+        done.add(f.id); changed = true;
+        S.fehlerlog.push({ zeit: new Date().toISOString(), typ: f.typ, fehler: f.fehler });
+        toast('Nicht gespeichert: ' + esc(f.fehler));
+      });
       S.queue = S.queue.filter(q => !done.has(q.id));
       save();
       if (!done.size) break;
     }
     if (!S.user) return;
+    if (S.queue.length) throw new Error('Übertragung unvollständig');
     const st = await api({ aktion: 'stammdaten', hash: angemeldet && D ? D.hash || '' : '' });
     const vorher = JSON.stringify([D, S.user, S.zugang]);
     applyStamm(st);
-    changed = vorher !== JSON.stringify([D, S.user, S.zugang]);
+    changed = changed || vorher !== JSON.stringify([D, S.user, S.zugang]);
     S.letzterAbgleich = new Date().toISOString(); S.letzterFehler = null;
     save();
     loadImages();
@@ -174,24 +218,25 @@ async function sync() {
     S.letzterFehler = (e.name === 'AbortError' ? 'Zeitüberschreitung' : String(e.message || e)); save();
   } finally {
     net.syncing = false;
-    softRender(changed || !D || ['queue', 'bons'].includes(ui.overlay));
+    softRender(changed || !D);
     if (net.again) { net.again = false; setTimeout(sync, 50); }
   }
 }
 
 function applyStamm(st) {
   if (!st.ok) {
-    if (st.abgemeldet || st.fehler === 'NICHT_ANGEMELDET') { ui.loginMsg = 'Auf einem anderen Gerät angemeldet.'; S = Object.assign(defaultState(), keepDevice()); ui.overlay = null; }
+    if (st.abgemeldet || st.fehler === 'NICHT_ANGEMELDET') { ui.loginMsg = 'Auf einem anderen Gerät angemeldet.'; S = Object.assign(defaultState(), keepDevice()); D = null; ui.page = null; ui.drawer = false; ui.overlay = null; }
     else throw new Error(st.fehler);
     return;
   }
-  if (!st.version || String(st.version).charAt(0) !== '2') throw new Error('Schnittstelle ist noch Version ' + (st.version || '1.x'));
+  if (!st.version || !/^2\.[1-9]/.test(String(st.version))) throw new Error('Schnittstelle ist noch Version ' + (st.version || '1.x'));
   if (st.benutzer) Object.assign(S.user, { rolle: st.benutzer.rolle, status: st.benutzer.status, name: st.benutzer.name });
   if (!st.benutzer || st.benutzer.status !== 'aktiv') return;
   if (!(st.unveraendert && D)) {
     D = { einstellungen: st.einstellungen, aufgaben: st.aufgaben, kategorien: st.kategorien, produkte: st.produkte, maerkte: st.maerkte, staende: st.staende, preise: st.preise, verfuegbarkeit: st.verfuegbarkeit, hash: st.hash };
   }
-  D.rechte = st.rechte; D.hinweise = st.hinweise || 0;
+  Object.assign(D, { rechte: st.rechte, hinweise: st.hinweise || [], schichten: st.schichten || [], personen: st.personen || [] });
+  S.queue.forEach(lokal);
   lsSet(KEY_DATA, D);
   const hatte = S.stand_id && (S.zugang || {})[S.stand_id] === today();
   S.zugang = st.zugang || {};
@@ -226,45 +271,62 @@ async function loadImages() {
   } catch (e) { /* später erneut */ } finally { loadImages.running = false; }
 }
 
-/* ---------- Darstellung ---------- */
-const app = document.getElementById('app');
+/* ---------- Symbole ---------- */
+const svg = (d, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const I = {
-  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
-  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
-  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
-  receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg>',
-  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></svg>',
-  box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m3 7 9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/></svg>',
-  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
-  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>',
-  pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>',
-  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c1.8.7 3 2.6 3.5 5.2"/></svg>',
-  cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
-  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
-  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>',
-  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/></svg>',
-  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/></svg>',
-  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
-  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 11 21 3l-8 18-2-8z"/></svg>',
-  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
-  euro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 6a7 7 0 1 0 0 12M4 10h9M4 14h9"/></svg>',
-  out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>'
+  menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>', 2.2),
+  x: svg('<path d="M6 6l12 12M18 6 6 18"/>', 2.4),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>', 2.2),
+  bell: svg('<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>'),
+  cart: svg('<path d="M3 4h2l2.4 11h10.2L20 7H6.2"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>'),
+  receipt: svg('<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>'),
+  chat: svg('<path d="M4 5h16v11H9l-5 4z"/>'),
+  box: svg('<path d="m3 7 9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>', 2.2),
+  chart: svg('<path d="M5 20V10M12 20V4M19 20v-7"/>', 2.2),
+  pin: svg('<path d="M12 21s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/>'),
+  users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c1.8.7 3 2.6 3.5 5.2"/>'),
+  user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4.2-6.5 8-6.5s7 2.5 8 6.5"/>'),
+  cal: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+  clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  trash: svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+  list: svg('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>', 2.2),
+  tag: svg('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>'),
+  key: svg('<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>'),
+  eye: svg('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  send: svg('<path d="M3 11 21 3l-8 18-2-8z"/>'),
+  edit: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>'),
+  euro: svg('<path d="M17 6a7 7 0 1 0 0 12M4 10h9M4 14h9"/>'),
+  check: svg('<path d="m5 12 5 5 9-10"/>', 2.4),
+  out: svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>'),
+  back: svg('<path d="m15 5-7 7 7 7"/>', 2.4),
+  down: svg('<path d="m6 9 6 6 6-6"/>', 2.4),
+  sync: svg('<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M4 4v4h4M20 20v-4h-4"/>'),
+  gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', 1.6)
 };
+
+/* ---------- Rahmen ---------- */
+const app = document.getElementById('app');
+const ladeHtml = '<p class="center"><span class="spin"></span></p>';
+const listeLeer = t => `<p class="empty">${esc(t)}</p>`;
 
 function chipHtml() {
   const n = S.queue.length;
-  if (!online()) return `<button class="sync wait" id="chip" data-act="queue">Offline${n ? ' · ' + n : ''}</button>`;
-  if (net.syncing || n) return `<button class="sync wait" id="chip" data-act="queue">Übertrage${n ? ' ' + n : ''} …</button>`;
-  return `<button class="sync" id="chip" data-act="queue">Alles übertragen</button>`;
+  if (!online()) return `<button class="sync wait" id="chip" data-go="abgleich">Offline${n ? ' · ' + n : ''}</button>`;
+  if (n) return `<button class="sync wait" id="chip" data-go="abgleich">Übertrage ${n}</button>`;
+  return `<button class="sync" id="chip" data-go="abgleich" aria-label="Abgleich">${net.syncing ? '<span class="spin sm"></span>' : I.check}</button>`;
 }
 function paintChip() {
   const c = document.getElementById('chip');
-  if (c) { c.outerHTML = chipHtml(); const n = document.getElementById('chip'); if (n) n.addEventListener('click', () => { ui.overlay = 'queue'; render(); }); }
+  if (!c) return;
+  c.outerHTML = chipHtml();
+  const n = document.getElementById('chip'); if (n) n.addEventListener('click', () => go('abgleich'));
 }
 function softRender(changed) {
   const ae = document.activeElement;
-  const tippt = ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.id !== 'c-in';
-  if (!changed || tippt || (OV[ui.overlay] && OV[ui.overlay].form)) return paintChip();
+  const tippt = ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.id !== 'c-in' && ae.id !== 'q';
+  const form = (ui.page && P[ui.page] && P[ui.page].form) || (ui.overlay && OV[ui.overlay] && OV[ui.overlay].form);
+  if (!changed || tippt || form) return paintChip();
   render();
 }
 
@@ -277,57 +339,180 @@ function render() {
   if (S.user.status === 'wartet') return renderWartet();
   if (S.user.status === 'gesperrt') return renderInfo('Zugang gesperrt');
   if (!D) return renderErsteDaten();
-  if (!S.stand_id || !stand()) { renderStandwahl(); return renderOverlayLayer(); }
-  if (needsCode(S.stand_id) && !S.nachtrag) { renderCode(ui.msg); ui.msg = null; return renderOverlayLayer(); }
+  if (S.stand_id && !stand()) S.stand_id = null;
+  if (ui.page && (!P[ui.page] || (P[ui.page].stand && !S.stand_id))) ui.page = null;
+
   const keep = sel => { const el = app.querySelector(sel); return el ? [el.scrollTop, el.scrollLeft] : null; };
-  const pos = { gw: keep('#gw'), chips: keep('.chips'), body: keep('.sheet .body'), ov: ui.overlay };
-  renderKasse();
-  renderOverlayLayer();
+  const pos = { gw: keep('#gw'), chips: keep('.filters .chips'), pb: keep('#pb'), page: render.page, dr: keep('.drawer .dbody'), sb: keep('.sheet .body'), ov: render.ov };
+
+  let main, bindMain;
+  if (ui.page) { [main, bindMain] = seite(ui.page); }
+  else if (!S.stand_id) { [main, bindMain] = seite('staende'); }
+  else if (needsCode(S.stand_id) && !S.nachtrag) { [main, bindMain] = codeAnsicht(); }
+  else { [main, bindMain] = kasse(); }
+
+  const st = stand(), m = marktVon(st);
+  app.innerHTML = `<header class="top">
+      <button class="where" data-home aria-label="Zur Kasse">
+        <small>${esc(m ? m.name : S.user.name)}</small><span>${esc(st ? st.name : 'Stand wählen')}</span></button>
+      ${chipHtml()}
+      ${hinweisZahl() ? `<button class="iconbtn bellbtn" data-go="hinweise" aria-label="${hinweisZahl()} Hinweise">${I.bell}<span class="badge">${hinweisZahl()}</span></button>` : ''}
+      <button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>
+    </header>
+    ${main}
+    ${ui.drawer ? drawerHtml() : ''}`;
+  bindMain(app);
+  app.querySelector('[data-home]').addEventListener('click', home);
+  app.querySelector('[data-burger]').addEventListener('click', () => { ui.drawer = !ui.drawer; if (ui.drawer && !ui.acc) ui.acc = accFuer(ui.page); render(); });
+  app.querySelectorAll('.top [data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
+  if (ui.drawer) bindDrawer();
+  renderSheet();
   const restore = (sel, v) => { const el = app.querySelector(sel); if (el && v) { el.scrollTop = v[0]; el.scrollLeft = v[1]; } };
-  restore('#gw', pos.gw); restore('.chips', pos.chips);
-  if (pos.ov === ui.overlay) restore('.sheet .body', pos.body);
+  restore('#gw', pos.gw); restore('.filters .chips', pos.chips); restore('.drawer .dbody', pos.dr);
+  if (pos.page === ui.page) restore('#pb', pos.pb);
+  if (pos.ov === ui.overlay) restore('.sheet .body', pos.sb);
+  render.page = ui.page; render.ov = ui.overlay;
 }
-function renderOverlayLayer() {
-  if (ui.overlay && OV[ui.overlay]) {
-    const o = OV[ui.overlay];
-    const html = o.screen ? `<div class="screen" data-ov>${o.body()}</div>`
-      : `<div class="scrim" data-scrim><section class="sheet${ui.animDone !== ui.overlay ? ' anim' : ''}" role="dialog" aria-modal="true" aria-label="${esc(o.titel())}">
-        <header><h2>${esc(o.titel())}</h2><button class="close" data-close aria-label="Schließen">×</button></header>
-        <div class="body">${o.body()}</div>${o.footer ? (f => f ? `<footer>${f}</footer>` : '')(o.footer()) : ''}</section></div>`;
-    app.insertAdjacentHTML('beforeend', html);
-    bindOverlay();
-  }
-  ui.animDone = ui.overlay;
-  if (ui.toast) app.insertAdjacentHTML('beforeend', `<div class="toast${ui.toastNew ? ' anim' : ''}" role="status">${ui.toast}</div>`);
-  ui.toastNew = false;
+
+/* Seite: Kopf mit Titel (und Zurück bei Unterseiten), Inhalt, feste Leiste unten */
+function seite(name) {
+  const p = P[name];
+  const titel = typeof p.titel === 'function' ? p.titel() : p.titel;
+  const eltern = p.eltern && (typeof p.eltern === 'function' ? p.eltern() : p.eltern);
+  const leiste = p.leiste ? p.leiste() : '';
+  const html = `<section class="page" aria-label="${esc(titel)}">
+      <div class="phead">${eltern ? `<button class="pback" data-back aria-label="Zurück">${I.back}</button>` : ''}<h1>${esc(titel)}</h1>${p.kopf ? p.kopf() : ''}</div>
+      <div class="pbody" id="pb">${p.body()}</div>
+      ${leiste ? `<div class="pbar">${leiste}</div>` : ''}
+    </section>`;
+  return [html, root => {
+    const s = root.querySelector('.page');
+    const b = s.querySelector('[data-back]'); if (b) b.addEventListener('click', () => go(eltern, { zurueck: true }));
+    s.querySelectorAll('[data-go]').forEach(x => x.addEventListener('click', () => go(x.dataset.go)));
+    if (p.bind) p.bind(s);
+  }];
 }
-function bindOverlay() {
-  const root = app.querySelector('[data-scrim], [data-ov]');
-  if (!root) return;
-  root.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeOverlay));
-  if (root.matches('[data-scrim]')) root.addEventListener('click', e => { if (e.target === root) closeOverlay(); });
-  root.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
-  const o = OV[ui.overlay];
-  if (o && o.bind) o.bind(root);
+
+function go(name, data) {
+  ui.drawer = false; ui.confirm = null;
+  if (OV[name]) { if (OV[name].open) OV[name].open(data); ui.overlay = name; return render(); }
+  if (!P[name]) return;
+  if (P[name].stand && !S.stand_id) name = 'staende';
+  ui.overlay = null;
+  const vorher = ui.page;
+  ui.page = name;
+  if (P[name].open) P[name].open(data);
+  if (vorher !== name) { try { history.pushState({ page: name }, ''); } catch (e) {} }
+  render();
+  const pb = app.querySelector('#pb'); if (pb && vorher !== name) pb.scrollTop = 0;
 }
-function go(name, data) { if (OV[name] && OV[name].open) { const r = OV[name].open(data); if (typeof r === 'string') name = r; } ui.overlay = name; render(); }
-function closeOverlay() { const o = OV[ui.overlay]; if (o && o.close) o.close(); ui.overlay = (o && o.zurueck && o.zurueck()) || null; ui.confirm = null; render(); }
+function home() { ui.drawer = false; ui.overlay = null; ui.confirm = null; if (ui.page) { ui.page = null; try { history.pushState({ page: null }, ''); } catch (e) {} } render(); }
 
 let toastTimer = null;
-function toast(msg) { ui.toast = msg; ui.toastNew = true; render(); clearTimeout(toastTimer); toastTimer = setTimeout(() => { ui.toast = null; const t = app.querySelector('.toast'); if (t) t.remove(); }, 2600); }
+function toast(msg) {
+  ui.toast = msg;
+  const alt = app.querySelector('.toast'); if (alt) alt.remove();
+  app.insertAdjacentHTML('beforeend', `<div class="toast anim" role="status">${msg}</div>`);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { ui.toast = null; const t = app.querySelector('.toast'); if (t) t.remove(); }, 2800);
+}
 
-const ladeHtml = '<p class="center"><span class="spin"></span></p>';
-const listeLeer = t => `<p class="empty">${esc(t)}</p>`;
-const menuItems = items => `<div class="menu">${items.filter(Boolean).map(([k, ic, t, badge]) => `<button class="item" data-go="${k}"><span class="ic">${ic}</span><span>${esc(t)}</span>${badge ? `<span class="pill q" style="margin-left:auto">${badge}</span>` : ''}</button>`).join('')}</div>`;
+/* ---------- Seitenleiste ---------- */
+function eintrag(name, ic, text, badge) {
+  return `<button class="ditem${ui.page === name || (!ui.page && name === 'kasse') ? ' aktiv' : ''}" data-dgo="${name}"><span class="ic">${ic}</span><span>${esc(text)}</span>${badge ? `<span class="dbadge">${badge}</span>` : ''}</button>`;
+}
+function gruppen() {
+  const l = leitet(), mitStand = !!S.stand_id;
+  const g = [];
+  g.push({ titel: 'Verkauf', items: [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], mitStand && ['verfuegbarkeit', I.box, l ? 'Verfügbarkeit' : 'Ausverkauft melden']].filter(Boolean) });
+  g.push({ titel: 'Schichten', items: [['meineschichten', I.clock, 'Meine Schichten'], mitStand && !l && ['plan', I.cal, 'Schichtplan']].filter(Boolean) });
+  if (rang() >= 2) g.push({ acc: 'standleitung', titel: 'Standleitung', ic: I.user, items: [
+    l && ['hinweise', I.bell, 'Zu bestätigen', hinweisZahl()],
+    l && ['plan', I.cal, 'Personalplanung'],
+    l && ['personal', I.key, 'Codes & Freischaltung'],
+    ['einladen', I.send, 'Person einladen'],
+    l && ['uebersicht', I.chart, 'Umsatz heute'],
+    l && ['standbons', I.receipt, 'Bons & Storno des Stands'],
+    l && ['nachtrag', I.plus, 'Nachtrag erfassen'],
+    l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean) });
+  if (rang() >= 3) g.push({ acc: 'marktleitung', titel: 'Marktleitung', ic: I.pin, items: [
+    ['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien & Preise'],
+    ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']] });
+  if (rang() >= 4) g.push({ acc: 'admin', titel: 'Admin', ic: I.gear, items: [['einstellungen', I.gear, 'Einstellungen']] });
+  return g;
+}
+function accFuer(page) { if (!page) return null; const g = gruppen().find(x => x.acc && x.items.some(i => i[0] === page)); return g ? g.acc : null; }
+function drawerHtml() {
+  const st = stand();
+  const standListe = MAERKTE().map(m => ({ m, st: STAENDE().filter(s => s.markt_id === m.markt_id) })).filter(x => x.st.length);
+  return `<div class="dscrim" data-dscrim><nav class="drawer" aria-label="Menü">
+    <div class="dhead"><b>${esc(S.user.name)}</b><small>${esc(role())}</small></div>
+    <div class="dbody">
+      <div class="dacc${ui.acc === 'stand' ? ' offen' : ''}">
+        <button class="dacchead stand" data-acc="stand"><span class="ic">${I.pin}</span><span><small>Stand</small>${esc(st ? st.name : 'wählen')}</span>${I.down}</button>
+        ${ui.acc === 'stand' ? `<div class="daccbody">${standListe.map(x => `<div class="dmarkt">${esc(x.m.name)}</div>${x.st.map(s => `<button class="ditem${s.stand_id === S.stand_id ? ' aktiv' : ''}" data-stand="${esc(s.stand_id)}"><span class="ic">${leitet(s.stand_id) ? I.user : !needsCode(s.stand_id) ? I.check : ''}</span><span>${esc(s.name)}</span><small class="dzeit">${esc(naechsteZeit(s))}</small></button>`).join('')}`).join('')}</div>` : ''}
+      </div>
+      ${gruppen().map(g => g.acc
+        ? (g.items.length ? `<div class="dacc${ui.acc === g.acc ? ' offen' : ''}"><button class="dacchead" data-acc="${g.acc}"><span class="ic">${g.ic}</span><span>${esc(g.titel)}</span>${g.acc === 'standleitung' && hinweisZahl() && ui.acc !== g.acc ? `<span class="dbadge">${hinweisZahl()}</span>` : ''}${I.down}</button>
+            ${ui.acc === g.acc ? `<div class="daccbody">${g.items.map(i => eintrag(...i)).join('')}</div>` : ''}</div>` : '')
+        : (g.items.length ? `<h4>${esc(g.titel)}</h4>${g.items.map(i => eintrag(...i)).join('')}` : '')).join('')}
+    <div class="dfoot">
+      ${eintrag('feedback', I.chat, 'Rückmeldung')}${eintrag('anzeige', I.eye, 'Anzeige')}${eintrag('abgleich', I.sync, 'Abgleich' + (S.queue.length ? ' · ' + S.queue.length : ''))}
+      <button class="ditem" data-logout><span class="ic">${I.out}</span><span>Abmelden</span></button>
+      ${DEMO ? demoHtml() : ''}
+      <p class="hint">Version ${APP_VERSION}</p>
+    </div></div></nav></div>`;
+}
+function bindDrawer() {
+  const sc = app.querySelector('[data-dscrim]');
+  const zu = () => { ui.drawer = false; render(); };
+  sc.addEventListener('click', e => { if (e.target === sc) zu(); });
+  sc.querySelectorAll('[data-acc]').forEach(b => b.addEventListener('click', () => { ui.acc = ui.acc === b.dataset.acc ? null : b.dataset.acc; render(); }));
+  sc.querySelectorAll('[data-dgo]').forEach(b => b.addEventListener('click', () => b.dataset.dgo === 'kasse' ? home() : go(b.dataset.dgo)));
+  sc.querySelectorAll('[data-stand]').forEach(b => b.addEventListener('click', () => standWaehlen(b.dataset.stand)));
+  sc.querySelector('[data-logout]').addEventListener('click', () => { if (S.queue.length && !confirmLogout()) return; logout(); });
+  if (DEMO) bindDemo(sc);
+}
+function confirmLogout() { return window.confirm(S.queue.length + ' Einträge sind noch nicht übertragen. Sie werden weiter übertragen. Abmelden?'); }
+function standWaehlen(id) {
+  if (S.stand_id !== id) { S.cart = {}; ui.kat = 'Alle'; ui.q = ''; }
+  S.stand_id = id; ui.drawer = false; ui.acc = null; ui.page = null; ui.overlay = null;
+  render(); loadImages();
+}
+function demoHtml() {
+  return `<div class="demo"><div class="row">Rolle<div class="seg">${Object.keys(ROLLEN).map(r => `<button data-role="${r}" aria-pressed="${role() === r}">${r.replace('leitung', '-L.')}</button>`).join('')}</div></div>
+    <div class="row">Netz<div class="seg"><button data-net="1" aria-pressed="${window.DEMO_NETZ !== false}">Online</button><button data-net="0" aria-pressed="${window.DEMO_NETZ === false}">Offline</button></div></div>
+    <button class="btn ghost sm" data-dreset>Demo zurücksetzen</button></div>`;
+}
+function bindDemo(root) {
+  root.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', async () => { window.DEMO_SERVER.setRolle(S.user.benutzer_id, b.dataset.role); await sync(); render(); }));
+  root.querySelectorAll('[data-net]').forEach(b => b.addEventListener('click', () => { window.DEMO_NETZ = b.dataset.net === '1'; if (window.DEMO_NETZ) net.ok = null; render(); sync(); }));
+  const r = root.querySelector('[data-dreset]'); if (r) r.addEventListener('click', () => { window.DEMO_SERVER.reset(); localStorage.removeItem(KEY_STATE); lsSet(KEY_DATA, null); location.reload(); });
+}
+
+/* ---------- Fenster über der Kasse ---------- */
+function renderSheet() {
+  if (!ui.overlay || !OV[ui.overlay]) return;
+  const o = OV[ui.overlay];
+  const html = o.screen ? `<div class="screen" data-ov>${o.body()}</div>`
+    : `<div class="scrim" data-scrim><section class="sheet${ui.animDone !== ui.overlay ? ' anim' : ''}" role="dialog" aria-modal="true" aria-label="${esc(o.titel())}">
+      <header><h2>${esc(o.titel())}</h2><button class="close" data-close aria-label="Schließen">×</button></header>
+      <div class="body">${o.body()}</div>${o.footer ? (f => f ? `<footer>${f}</footer>` : '')(o.footer()) : ''}</section></div>`;
+  app.insertAdjacentHTML('beforeend', html);
+  ui.animDone = ui.overlay;
+  const root = app.querySelector('[data-scrim], [data-ov]');
+  root.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeOverlay));
+  if (root.matches('[data-scrim]')) root.addEventListener('click', e => { if (e.target === root) closeOverlay(); });
+  if (o.bind) o.bind(root);
+}
+function closeOverlay() { const o = OV[ui.overlay]; ui.overlay = (o && o.zurueck && o.zurueck()) || null; ui.confirm = null; render(); }
 
 /* ---------- Anmeldung, Registrierung ---------- */
 function einladungToken() {
   const m = /[?&#]e=([A-Za-z0-9]+)/.exec(location.search + location.hash);
   return m ? m[1] : null;
 }
-function loginKopf() {
-  return `<img class="corner" src="logo.png" alt="Pfadfinderbund Süd"><h1 class="apptitle">${esc(E().app_titel)}</h1>`;
-}
+const loginKopf = () => `<img class="corner" src="logo.png" alt="Pfadfinderbund Süd"><h1 class="apptitle">${esc(E().app_titel)}</h1>`;
 function renderStart(err) {
   app.innerHTML = `<div class="screen"><form class="start login" id="reg" novalidate>
     ${loginKopf()}
@@ -335,11 +520,12 @@ function renderStart(err) {
     <div class="field"><label for="r-name">Name</label><input id="r-name" autocomplete="username" autocapitalize="words"></div>
     <div class="field"><label for="r-pin">PIN</label><input id="r-pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="6"></div>
     ${err ? `<p class="err">${esc(err)}</p>` : ''}
-    <button class="btn wide" type="submit" ${ui.busy ? 'disabled' : ''}>${ui.busy ? '…' : 'Anmelden'}</button>
+    <button class="btn wide${ui.busy ? ' busy' : ''}" type="submit" ${ui.busy ? 'disabled' : ''}>Anmelden</button>
     ${DEMO ? '<p class="hint center">Demo · Fritz, Anna, Ben · PIN beliebig</p>' : ''}
   </form></div>`;
   document.getElementById('reg').addEventListener('submit', e => {
     e.preventDefault();
+    if (ui.busy) return;
     login(document.getElementById('r-name').value.trim().replace(/\s+/g, ' '), document.getElementById('r-pin').value.trim());
   });
 }
@@ -347,6 +533,7 @@ async function login(name, pin) {
   if (name.length < 2) return renderStart('Bitte Namen eingeben.');
   if (!/^\d{4,6}$/.test(pin)) return renderStart('PIN: 4–6 Ziffern.');
   ui.busy = true; renderStart();
+  document.getElementById('r-name').value = name;
   let r;
   try { r = await api({ aktion: 'anmelden', name, pin }, true); }
   catch (e) { ui.busy = false; return renderStart('Kein Netz.'); }
@@ -360,10 +547,11 @@ function angemeldet(b) {
   S = Object.assign(defaultState(), keepDevice());
   S.user = { benutzer_id: b.benutzer_id, name: b.name, rolle: b.rolle, status: b.status };
   D = null; lsSet(KEY_DATA, null);
+  Object.assign(ui, { page: null, drawer: false, acc: null, overlay: null });
   if (einladungToken()) history.replaceState(null, '', location.pathname);
   save(); render(); sync();
 }
-function logout() { S = Object.assign(defaultState(), keepDevice()); D = null; lsSet(KEY_DATA, null); ui.overlay = null; render(); }
+function logout() { S = Object.assign(defaultState(), keepDevice()); D = null; lsSet(KEY_DATA, null); Object.assign(ui, { page: null, drawer: false, acc: null, overlay: null }); render(); }
 
 async function renderRegistrierung(token, err) {
   if (!renderRegistrierung.info || renderRegistrierung.info.token !== token) {
@@ -384,10 +572,11 @@ async function renderRegistrierung(token, err) {
     <div class="field"><label for="p1">PIN wählen (4–6 Ziffern)</label><input id="p1" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
     <div class="field"><label for="p2">PIN wiederholen</label><input id="p2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
     ${err ? `<p class="err">${esc(err)}</p>` : ''}
-    <button class="btn wide" type="submit" ${ui.busy ? 'disabled' : ''}>${ui.busy ? '…' : 'Registrieren'}</button>
+    <button class="btn wide${ui.busy ? ' busy' : ''}" type="submit" ${ui.busy ? 'disabled' : ''}>Registrieren</button>
   </form></div>`;
   document.getElementById('rf').addEventListener('submit', async e => {
     e.preventDefault();
+    if (ui.busy) return;
     const p1 = document.getElementById('p1').value.trim(), p2 = document.getElementById('p2').value.trim();
     if (!/^\d{4,6}$/.test(p1)) return renderRegistrierung(token, 'PIN: 4–6 Ziffern.');
     if (p1 !== p2) return renderRegistrierung(token, 'PINs stimmen nicht überein.');
@@ -403,7 +592,7 @@ async function renderRegistrierung(token, err) {
 function renderWartet() {
   app.innerHTML = `<div class="screen"><div class="start login">${loginKopf()}
     <p class="info-msg">${esc(S.user.name)} · wartet auf Freigabe</p>
-    <button class="btn wide" id="wp">Erneut prüfen</button>
+    <button class="btn wide${net.syncing ? ' busy' : ''}" id="wp" ${net.syncing ? 'disabled' : ''}>Erneut prüfen</button>
     <div class="whoami"><span>${esc(S.user.name)}</span><button class="mini-btn" id="lo">Abmelden</button></div></div></div>`;
   document.getElementById('wp').addEventListener('click', () => sync());
   document.getElementById('lo').addEventListener('click', logout);
@@ -420,72 +609,58 @@ function renderErsteDaten() {
   document.getElementById('lo').addEventListener('click', logout);
 }
 
-/* ---------- Stand wählen ---------- */
+/* ---------- Stand wählen (Startseite ohne Stand) ---------- */
 function naechsteZeit(st) {
   const t = today();
   const z = (st.standzeiten || []).find(x => x.datum >= t);
   return z ? (z.datum === t ? 'heute ' : fmtDate(z.datum) + ' ') + z.von + '–' + z.bis : '';
 }
-function standKarten(onlyOwn) {
-  const gruppen = MAERKTE().map(m => ({ m, st: STAENDE().filter(s => s.markt_id === m.markt_id && (!onlyOwn || leitet(s.stand_id))) })).filter(g => g.st.length);
-  if (!gruppen.length) return listeLeer('Kein Stand');
-  return gruppen.map(g => `<div class="mgroup"><h3>${esc(g.m.name)}</h3>${g.st.map(s => `<button class="mbtn" data-stand="${esc(s.stand_id)}" aria-current="${s.stand_id === S.stand_id}">
-      <b>${esc(s.name)}</b><span class="muted">${esc(naechsteZeit(s))}</span>
-      ${leitet(s.stand_id) ? '<span class="pill s" style="align-self:flex-start">Leitung</span>' : !needsCode(s.stand_id) ? '<span class="pill ok" style="align-self:flex-start">freigeschaltet</span>' : ''}
-    </button>`).join('')}</div>`).join('');
-}
-function bindStandKarten(root) {
-  root.querySelectorAll('[data-stand]').forEach(b => b.addEventListener('click', () => {
-    if (S.stand_id !== b.dataset.stand) { S.cart = {}; ui.kat = 'Alle'; ui.q = ''; }
-    S.stand_id = b.dataset.stand; ui.overlay = null; render(); loadImages();
-  }));
-}
-function renderStandwahl() {
-  app.innerHTML = `<div class="screen"><div class="start">
-    <div class="rowhead"><h1>Stand wählen</h1>${D.hinweise ? `<button class="bell" data-act="hinweise">${I.bell}<span>${D.hinweise}</span></button>` : ''}</div>
-    ${standKarten(false)}
-    ${rang() >= 3 ? '<button class="btn ghost wide" data-go2="verwaltung">Verwaltung</button>' : ''}
-    <div class="whoami"><span>${esc(S.user.name)} · ${esc(role())}</span><button class="mini-btn" id="lo">Abmelden</button></div>
-  </div></div>`;
-  bindStandKarten(app);
-  document.getElementById('lo').addEventListener('click', logout);
-  app.querySelectorAll('[data-act="hinweise"]').forEach(b => b.addEventListener('click', () => go('hinweise')));
-  app.querySelectorAll('[data-go2]').forEach(b => b.addEventListener('click', () => go(b.dataset.go2)));
-}
+P.staende = {
+  titel: 'Stand wählen',
+  body: () => {
+    const gruppen = MAERKTE().map(m => ({ m, st: STAENDE().filter(s => s.markt_id === m.markt_id) })).filter(g => g.st.length);
+    if (!gruppen.length) return listeLeer('Kein Stand');
+    return gruppen.map(g => `<div class="mgroup"><h3>${esc(g.m.name)}</h3>${g.st.map(s => `<button class="mbtn" data-stand="${esc(s.stand_id)}" aria-current="${s.stand_id === S.stand_id}">
+        <b>${esc(s.name)}</b><span class="muted">${esc(naechsteZeit(s))}</span>
+        ${leitet(s.stand_id) ? '<span class="pill s" style="align-self:flex-start">Leitung</span>' : !needsCode(s.stand_id) ? '<span class="pill ok" style="align-self:flex-start">freigeschaltet</span>' : ''}
+      </button>`).join('')}</div>`).join('');
+  },
+  bind: root => root.querySelectorAll('[data-stand]').forEach(b => b.addEventListener('click', () => standWaehlen(b.dataset.stand)))
+};
 
 /* ---------- Code ---------- */
-function renderCode(err) {
-  app.innerHTML = `<div class="screen"><form class="start" id="codeform" novalidate>
+function codeAnsicht() {
+  const err = ui.msg; ui.msg = null;
+  const meine = (D.schichten || []).filter(s => s.benutzer_id === S.user.benutzer_id && s.stand_id === S.stand_id && s.datum >= today() && s.status === 'geplant');
+  const html = `<section class="page"><div class="pbody"><form class="start" id="codeform" novalidate>
     <h1>${esc(standName(S.stand_id))}</h1>
     <div class="field"><label for="c-in">Code der Standleitung</label>
       <input id="c-in" class="codein num" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000 000"></div>
-    ${err ? `<p class="err">${esc(err)}</p>` : ''}
-    <button class="btn wide" type="submit" ${ui.busy ? 'disabled' : ''}>${ui.busy ? '…' : 'Freischalten'}</button>
-    <button class="btn ghost wide" type="button" id="c-plan">Personalplan</button>
-    <button class="btn ghost wide" type="button" id="c-back">Anderer Stand</button>
-    <div class="whoami"><span>${esc(S.user.name)}</span><button class="mini-btn" type="button" id="lo">Abmelden</button></div>
-  </form></div>`;
-  const inp = document.getElementById('c-in');
-  if (!ui.overlay) inp.focus();
-  document.getElementById('codeform').addEventListener('submit', e => { e.preventDefault(); redeem(inp.value.replace(/\D/g, '')); });
-  document.getElementById('c-back').addEventListener('click', () => { S.stand_id = null; S.cart = {}; render(); });
-  document.getElementById('c-plan').addEventListener('click', () => go('plan'));
-  document.getElementById('lo').addEventListener('click', logout);
+    ${err || ui.codeErr ? `<p class="err">${esc(err || ui.codeErr)}</p>` : ''}
+    <button class="btn wide" type="submit">Freischalten</button>
+    ${meine.length ? `<p class="muted center">Deine Schicht: ${meine.slice(0, 2).map(s => (s.datum === today() ? 'heute' : fmtDate(s.datum)) + ' ' + s.von + '–' + s.bis).join(', ')}</p>` : ''}
+    <button class="btn ghost wide" type="button" data-go="plan">Schichtplan</button>
+  </form></div></section>`;
+  return [html, root => {
+    const inp = root.querySelector('#c-in');
+    if (!ui.drawer && !ui.overlay) inp.focus();
+    root.querySelector('#codeform').addEventListener('submit', e => { e.preventDefault(); tue(e.submitter || root.querySelector('#codeform [type=submit]'), () => redeem(inp.value.replace(/\D/g, ''))); });
+    root.querySelector('[data-go="plan"]').addEventListener('click', () => go('plan'));
+  }];
 }
 async function redeem(code) {
-  if (code.length !== 6) return renderCode('6 Ziffern.');
-  ui.busy = true; renderCode();
+  ui.codeErr = null;
+  if (code.length !== 6) { ui.codeErr = '6 Ziffern.'; return render(); }
   let r;
   try { r = await api({ aktion: 'code_einloesen', code, stand_id: S.stand_id }, true); } catch (e) { r = { ok: false, fehler: 'Kein Netz.' }; }
-  ui.busy = false;
-  if (!r.ok) return renderCode(r.fehler);
+  if (!r.ok) { ui.codeErr = r.fehler; return render(); }
   S.zugang[S.stand_id] = r.datum || today();
-  toast('Freigeschaltet');
+  render(); toast('Freigeschaltet');
   sync();
 }
 
 /* ---------- Kasse ---------- */
-function renderKasse() {
+function kasse() {
   const st = stand();
   const sortiment = sortimentFor(st);
   const cats = [...new Set(sortiment.map(p => p.kategorie))];
@@ -511,17 +686,8 @@ function renderKasse() {
   if (!items.length) grid = listeLeer(q ? 'Nichts gefunden' : 'Keine Produkte');
   const total = cartTotal(), count = cartCount(), payout = total < 0;
   const ausserhalb = !S.nachtrag && !inStandzeit(st);
-  app.innerHTML = `
-  <header class="top">
-    <button class="where" data-act="stand" aria-label="Stand-Menü">
-      <small>${esc(S.user.name)} · ${esc(marktVon(st) ? marktVon(st).name : '')}</small>
-      <span>${esc(st.name)} ▾</span>
-    </button>
-    ${chipHtml()}
-    ${D.hinweise ? `<button class="iconbtn bellbtn" data-act="hinweise" aria-label="${D.hinweise} Hinweise">${I.bell}<span class="badge">${D.hinweise}</span></button>` : ''}
-    <button class="iconbtn" data-act="menu" aria-label="Menü">${I.menu}</button>
-  </header>
-  ${S.nachtrag ? `<div class="banner"><span>Nachtrag · ${fmtTime(S.nachtrag.zeit)}</span><button data-act="endNachtrag">Beenden</button></div>` : ''}
+  const html = `
+  ${S.nachtrag ? `<div class="banner"><span>Nachtrag · ${fmtTime(S.nachtrag.zeit)}</span><button data-endnt>Beenden</button></div>` : ''}
   ${ausserhalb ? '<div class="banner">Außerhalb der Standzeit</div>' : ''}
   <div class="filters">
     <label class="search">${I.search}<input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}" aria-label="Produkt suchen"></label>
@@ -529,31 +695,30 @@ function renderKasse() {
   </div>
   <div class="gridwrap" id="gw"><div class="grid">${grid}</div></div>
   <div class="bar">
-    <button class="sum${payout ? ' payout' : ''}" data-act="cart" ${count ? '' : 'disabled'}>
+    <button class="sum${payout ? ' payout' : ''}" data-cart ${count ? '' : 'disabled'}>
       <small>${payout ? 'Auszahlung · ' : ''}${count} Artikel</small>
       <b class="num">${payout ? '↑ ' + eur(-total) : eur(total)}</b>
     </button>
-    <button class="btn${payout && !S.nachtrag ? ' payout' : ''}" data-act="pay" ${count ? '' : 'disabled'}>${S.nachtrag ? 'Speichern' : payout ? 'Auszahlen' : 'Kassieren'}</button>
+    <button class="btn${payout && !S.nachtrag ? ' payout' : ''}" data-pay ${count ? '' : 'disabled'}>${S.nachtrag ? 'Speichern' : payout ? 'Auszahlen' : 'Kassieren'}</button>
   </div>`;
-  const qi = document.getElementById('q');
-  qi.addEventListener('input', () => { ui.q = qi.value; const pos = qi.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); });
-  app.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => { ui.kat = b.dataset.k; ui.q = ''; render(); document.getElementById('gw').scrollTop = 0; }));
-  app.querySelectorAll('.tile').forEach(t => {
-    let timer = null, long = false;
-    const pid = t.dataset.p;
-    t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { long = true; change(pid, -1); }, 480); });
-    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => t.addEventListener(ev, () => clearTimeout(timer)));
-    t.addEventListener('contextmenu', e => e.preventDefault());
-    t.addEventListener('click', () => { if (long) { long = false; return; } change(pid, +1); });
-  });
-  app.querySelectorAll('[data-info]').forEach(b => b.addEventListener('click', () => go('info', b.dataset.info)));
-  app.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', () => { delete S.cart[b.dataset.tdel]; render(); }));
-  app.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
-    const a = b.dataset.act;
-    if (a === 'pay') { if (S.nachtrag) return saveBon(); return go('pay'); }
-    if (a === 'endNachtrag') { S.nachtrag = null; S.cart = {}; return render(); }
-    go(a);
-  }));
+  return [html, root => {
+    const qi = root.querySelector('#q');
+    qi.addEventListener('input', () => { ui.q = qi.value; const pos = qi.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); });
+    root.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => { ui.kat = b.dataset.k; ui.q = ''; render(); document.getElementById('gw').scrollTop = 0; }));
+    root.querySelectorAll('.tile').forEach(t => {
+      let timer = null, long = false;
+      const pid = t.dataset.p;
+      t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { long = true; change(pid, -1); }, 480); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => t.addEventListener(ev, () => clearTimeout(timer)));
+      t.addEventListener('contextmenu', e => e.preventDefault());
+      t.addEventListener('click', () => { if (long) { long = false; return; } change(pid, +1); });
+    });
+    root.querySelectorAll('[data-info]').forEach(b => b.addEventListener('click', () => go('info', b.dataset.info)));
+    root.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', () => { delete S.cart[b.dataset.tdel]; render(); }));
+    root.querySelector('[data-cart]').addEventListener('click', () => go('cart'));
+    root.querySelector('[data-pay]').addEventListener('click', () => S.nachtrag ? saveBon() : go('pay'));
+    const nt = root.querySelector('[data-endnt]'); if (nt) nt.addEventListener('click', () => { S.nachtrag = null; S.cart = {}; render(); });
+  }];
 }
 function change(pid, d) {
   if (d > 0 && availOf(S.stand_id, pid) === 'ausverkauft') return toast('Ausverkauft');
@@ -631,6 +796,7 @@ function saveBon() {
   S.bons.push(bon);
   S.cart = {}; ui.overlay = null;
   enqueue('Bon', bon);
+  render();
   if (nt) toast(`Nachtrag ${eur(total)}`);
   else if (total < 0) toast(`<b class="neg-t">↑ ${eur(-total)} auszahlen</b>`);
   else toast(bon.rueckgeld ? `Rückgeld <b>${eur(bon.rueckgeld)}</b>` : 'Gespeichert');
@@ -655,98 +821,12 @@ OV.info = {
   bind: root => {
     root.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => { ui.zoom = b.dataset.zoom; go('bild'); }));
     const add = root.querySelector('[data-x="add"]'); if (add) add.addEventListener('click', () => { ui.overlay = null; change(ui.info, +1); });
-    const ed = root.querySelector('[data-x="edit"]'); if (ed) ed.addEventListener('click', () => window.openProdukt && window.openProdukt(ui.info));
+    const ed = root.querySelector('[data-x="edit"]'); if (ed) ed.addEventListener('click', () => { ui.overlay = null; openProdukt(ui.info, null); });
   }
 };
 OV.bild = {
   screen: true, zurueck: () => 'info',
   body: () => `<div class="zoomview"><img src="${ui.zoom}" alt=""><button class="close big" data-close aria-label="Schließen">×</button></div>`
-};
-
-/* ---------- Menü ---------- */
-OV.menu = {
-  titel: () => 'Menü',
-  body: () => menuItems([
-    rang() >= 2 ? ['hinweise', I.bell, 'Hinweise', D.hinweise || ''] : null,
-    ['bons', I.receipt, 'Letzte Bons'],
-    ['feedback', I.chat, 'Rückmeldung'],
-    ['anzeige', I.eye, 'Anzeige'],
-    rang() >= 3 ? ['verwaltung', I.key, 'Verwaltung'] : null,
-    ['logout', I.out, 'Abmelden']
-  ]) + (DEMO ? `<div class="demo"><div class="row">Rolle<div class="seg">${Object.keys(ROLLEN).map(r => `<button data-role="${r}" aria-pressed="${role() === r}">${r.replace('leitung', '-L.')}</button>`).join('')}</div></div>
-    <div class="row">Netz<div class="seg"><button data-net="1" aria-pressed="${window.DEMO_NETZ !== false}">Online</button><button data-net="0" aria-pressed="${window.DEMO_NETZ === false}">Offline</button></div></div>
-    <button class="btn ghost" data-x="reset">Demo zurücksetzen</button></div>` : '') + `<p class="hint">${esc(S.user.name)}<span class="role">${esc(role())}</span> · ${APP_VERSION}</p>`,
-  bind: root => {
-    root.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', async () => { window.DEMO_SERVER.setRolle(S.user.benutzer_id, b.dataset.role); await sync(); render(); }));
-    root.querySelectorAll('[data-net]').forEach(b => b.addEventListener('click', () => { window.DEMO_NETZ = b.dataset.net === '1'; if (window.DEMO_NETZ) net.ok = null; render(); sync(); }));
-    const r = root.querySelector('[data-x="reset"]'); if (r) r.addEventListener('click', () => { window.DEMO_SERVER.reset(); localStorage.removeItem(KEY_STATE); lsSet(KEY_DATA, null); location.reload(); });
-  }
-};
-OV.anzeige = {
-  titel: () => 'Anzeige', zurueck: () => 'menu',
-  body: () => `<div class="seg big">${[[1, 'Normal'], [2, 'Groß'], [3, 'Sehr groß']].map(([v, l]) => `<button data-gr="${v}" aria-pressed="${(S.anzeige || 1) === v}">${l}</button>`).join('')}</div>`,
-  bind: root => root.querySelectorAll('[data-gr]').forEach(b => b.addEventListener('click', () => { S.anzeige = +b.dataset.gr; render(); }))
-};
-OV.logout = {
-  titel: () => 'Abmelden', zurueck: () => 'menu',
-  body: () => `${S.queue.length ? `<p class="muted" style="margin:0">${S.queue.length} Einträge werden weiter übertragen.</p>` : ''}<button class="btn danger wide" data-x="lo">Abmelden</button>`,
-  bind: root => root.querySelector('[data-x="lo"]').addEventListener('click', logout)
-};
-OV.queue = {
-  titel: () => 'Abgleich',
-  body: () => {
-    const n = S.queue.length;
-    return `<div class="stats"><div class="stat"><small>Wartend</small><b class="num">${n}</b></div><div class="stat"><small>Letzter Abgleich</small><b class="num" style="font-size:20px">${S.letzterAbgleich ? fmtClock(S.letzterAbgleich) : '–'}</b></div></div>
-      ${S.letzterFehler ? `<p class="errlist">${esc(S.letzterFehler)}</p>` : ''}
-      ${(S.fehlerlog || []).length ? `<div class="errlist"><b>Abgelehnt</b><br>${S.fehlerlog.slice(-5).reverse().map(f => `${fmtClock(f.zeit)} · ${esc(f.typ)}: ${esc(f.fehler)}`).join('<br>')}</div>` : ''}
-      <p class="hint" style="margin:0">${DEMO ? 'Demo' : 'Gerät ' + esc(S.geraet_id.slice(0, 8))} · ${APP_VERSION}</p>`;
-  },
-  footer: () => `<button class="btn wide" data-x="sync" ${net.syncing ? 'disabled' : ''}>${net.syncing ? '…' : 'Jetzt abgleichen'}</button>`,
-  bind: root => root.querySelector('[data-x="sync"]').addEventListener('click', () => { sync().then(() => { if (ui.overlay === 'queue') render(); }); render(); })
-};
-
-/* ---------- Bons, Rückmeldung ---------- */
-function myBons() { return S.bons.filter(b => b.benutzer_id === S.user.benutzer_id && b.art === 'kasse').sort((a, b) => b.zeit.localeCompare(a.zeit)); }
-function stornoable() { return myBons().slice(0, E().storno_anzahl).filter(b => b.status === 'ok').map(b => b.bon_id); }
-function bonKarte(b, kannStorno, extra) {
-  return `<div class="card">
-    <div class="hd"><b class="num${b.summe < 0 ? ' neg' : ''}">${eur(b.summe)}</b><span class="pill ${b.status === 'ok' ? 'ok' : 'st'}">${b.status === 'ok' ? (b.art === 'nachtrag' ? 'Nachtrag' : 'gültig') : 'storniert'}</span></div>
-    <span class="muted">${fmtClock(b.zeit)} · ${esc(extra || standName(b.stand_id))}</span>
-    <span class="muted">${esc(typeof b.positionen === 'string' ? b.positionen : b.positionen.map(p => p.menge + '× ' + p.produktname).join(', '))}</span>
-    ${kannStorno ? (ui.confirm === b.bon_id
-      ? `<div class="confirm">Stornieren? <button class="btn danger sm" data-storno="${b.bon_id}">Ja</button><button class="btn ghost sm" data-nein>Nein</button></div>`
-      : `<button class="mini-btn" style="align-self:flex-start;margin:0" data-ask="${b.bon_id}">Stornieren</button>`) : ''}</div>`;
-}
-function bindConfirm(root, onYes, attr = 'storno') {
-  root.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () => { ui.confirm = b.dataset.ask; render(); }));
-  root.querySelectorAll('[data-nein]').forEach(b => b.addEventListener('click', () => { ui.confirm = null; render(); }));
-  root.querySelectorAll(`[data-${attr}]`).forEach(b => b.addEventListener('click', () => { ui.confirm = null; onYes(b.dataset[attr]); }));
-}
-function stornoEnqueue(id) {
-  const b = S.bons.find(x => x.bon_id === id); if (b) b.status = 'storniert';
-  const pending = S.queue.find(q => q.typ === 'Bon' && q.data.bon_id === id); if (pending) pending.data.status = 'storniert';
-  enqueue('Storno', { bon_id: id });
-  toast('Storniert');
-}
-OV.bons = {
-  titel: () => 'Letzte Bons', zurueck: () => 'menu',
-  body: () => { const can = stornoable(); const l = myBons().slice(0, 15); return l.length ? l.map(b => bonKarte(b, can.includes(b.bon_id))).join('') : listeLeer('Keine Bons'); },
-  bind: root => bindConfirm(root, stornoEnqueue)
-};
-OV.feedback = {
-  form: true, zurueck: () => 'menu',
-  titel: () => 'Rückmeldung',
-  body: () => `<div class="field"><label>Art</label><div class="seg" id="fb-typ">${['Problem', 'Idee', 'Kommentar'].map((t, i) => `<button data-t="${t}" aria-pressed="${i === 0}">${t}</button>`).join('')}</div></div>
-    <div class="field"><label for="fb-text">Text</label><textarea id="fb-text" rows="5"></textarea></div>`,
-  footer: () => '<button class="btn wide" data-x="send">Senden</button>',
-  bind: root => {
-    root.querySelectorAll('#fb-typ button').forEach(b => b.addEventListener('click', () => root.querySelectorAll('#fb-typ button').forEach(x => x.setAttribute('aria-pressed', x === b))));
-    root.querySelector('[data-x="send"]').addEventListener('click', () => {
-      const text = root.querySelector('#fb-text').value.trim(); if (!text) return;
-      enqueue('Rueckmeldung', { rm_id: uid(), zeit: new Date().toISOString(), benutzer_id: S.user.benutzer_id, stand_id: S.stand_id || '', typ: root.querySelector('#fb-typ [aria-pressed="true"]').dataset.t, text, geraet_info: navigator.userAgent.slice(0, 120) });
-      ui.overlay = null; toast('Gesendet');
-    });
-  }
 };
 
 /* ---------- Start ---------- */
@@ -755,13 +835,21 @@ async function keepAwake() { try { if ('wakeLock' in navigator && document.visib
 
 window.addEventListener('DOMContentLoaded', async () => {
   if (!DEMO) Object.assign(IMG, await IDB.all());
-  if (S.user && !S.user.status) S.user = null;   // Anmeldung aus älterer Version
+  if (S.user && !S.user.status) S.user = null;
+  if (D && !Array.isArray(D.hinweise)) D.hinweise = [];
+  try { history.replaceState({ page: null }, ''); } catch (e) {}
   render();
   if (S.user || S.queue.length) sync();
   const every = () => Math.max(20, (E().abgleich_sekunden || 60)) * 1000;
   (function loop() { setTimeout(() => { if (!document.hidden) sync(); loop(); }, every()); })();
   window.addEventListener('online', () => { net.ok = null; sync(); });
   window.addEventListener('offline', () => { net.ok = false; paintChip(); });
+  window.addEventListener('popstate', e => {
+    if (ui.drawer) { ui.drawer = false; return render(); }
+    if (ui.overlay) { ui.overlay = null; return render(); }
+    const p = e.state && e.state.page;
+    ui.page = p && P[p] ? p : null; render();
+  });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { keepAwake(); sync(); } });
   keepAwake();
   if ('serviceWorker' in navigator && !DEMO) { try { navigator.serviceWorker.register('sw.js'); } catch (e) {} }
