@@ -280,12 +280,71 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
 .center { text-align: center; }
 .spin { display: inline-block; width: 18px; height: 18px; border: 3px solid var(--line); border-top-color: var(--green); border-radius: 50%; vertical-align: -3px; }
 @media (prefers-reduced-motion: no-preference) { .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } } }
+
+  /* 2.0 */
+  #app.gross-2 .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  #app.gross-3 .grid { grid-template-columns: 1fr 1fr; }
+  #app.gross-2 .tile .nm, #app.gross-2 .tile .pr { font-size: 16px; }
+  #app.gross-3 .tile .nm, #app.gross-3 .tile .pr { font-size: 19px; }
+  #app.gross-2 .bar .sum b, #app.gross-3 .bar .sum b { font-size: 26px; }
+  #app.gross-3 .btn { font-size: 19px; }
+  #app.gross-3 .line .n b, #app.gross-3 .menu .item { font-size: 18px; }
+  .top .bellbtn { position: relative; }
+  .badge { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; border-radius: 999px; background: #E0A526; color: #17231A; font-size: 11px; font-weight: 800; display: grid; place-items: center; padding: 0 4px; }
+  .rowhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .bell { position: relative; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; width: 44px; height: 44px; display: grid; place-items: center; color: var(--ink); padding: 0; }
+  .bell svg { width: 22px; height: 22px; }
+  .bell span { position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; border-radius: 999px; background: #E0A526; font-size: 12px; font-weight: 800; display: grid; place-items: center; padding: 0 5px; }
+  .mgroup { display: flex; flex-direction: column; gap: 8px; }
+  .mgroup h3, h3.sub { margin: 8px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-family: inherit; font-weight: 800; }
+  .tiledel { position: absolute; right: 6px; bottom: 44px; width: 32px; height: 32px; border-radius: 999px; border: 0; background: rgba(255,255,255,.94); color: var(--danger); display: grid; place-items: center; padding: 0; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .tiledel svg { width: 17px; height: 17px; }
+  .zoomview { position: absolute; inset: 0; background: #000; display: grid; place-items: center; z-index: 60; }
+  .zoomview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .zoomview .close { position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,.9); }
+  .zoom { border: 0; padding: 0; background: none; width: 100%; display: block; }
+  .seg.big button { padding: 14px 4px; font-size: 15px; }
+  .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .acts .mini-btn { margin: 0; }
+  .btn.sm { padding: 8px 14px; font-size: 14px; border-radius: 10px; }
+  .kv { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .kv span { min-width: 0; }
+  .pin-in { width: 96px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 15px; text-align: right; background: var(--surface); }
+  .check { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+  .check input { width: 20px; height: 20px; accent-color: var(--green); }
+  .chips.wrap { flex-wrap: wrap; overflow: visible; padding: 0; }
+  .chips.plan { padding: 0; }
+  .zrow { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) 36px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .zrow input { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 6px; font-size: 14px; background: var(--surface); }
+  .linkbox { background: var(--bg); border: 1px dashed var(--line); border-radius: 10px; padding: 12px; font-size: 13px; word-break: break-all; user-select: all; -webkit-user-select: all; }
+  .danger-t { color: var(--danger) !important; }
+  .hd.plain { border: 0; background: none; padding: 0; width: 100%; text-align: left; }
+  .srow-btn { display: flex; flex-direction: column; text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+  .srow-btn small { color: var(--muted); }
+  .plist .prow .dot, .prow .dot { width: 12px; height: 12px; border-radius: 999px; flex: none; }
+  .tb.neu { border: 2px solid var(--green); }
+  .tb { width: auto; min-width: 84px; height: auto; min-height: 40px; padding: 6px 28px 6px 8px; word-break: break-all; }
+  .scale { position: relative; height: 16px; margin-left: 38%; font-size: 11px; color: var(--muted); }
+  .scale span { position: absolute; transform: translateX(-50%); }
+  .srow { display: grid; grid-template-columns: 38% 1fr; gap: 4px 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .srow .sl { min-width: 0; }
+  .srow .sl b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
+  .srow .sl small { color: var(--muted); font-size: 12px; }
+  .srow .acts { grid-column: 1 / -1; }
+  .srow.offen .blk { opacity: .45; background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,.5) 6px 12px) !important; }
+  .track { position: relative; height: 22px; background: var(--bg); border-radius: 6px; }
+  .track .blk { position: absolute; top: 3px; bottom: 3px; border-radius: 5px; }
+  .track .now { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--danger); }
+  .sform { margin-top: 6px; }
+  .pill.q { background: var(--amber-soft); color: var(--amber); }
 </style>
 </head>
 <body>
 <div id="app" aria-live="polite"><p class="empty">Kasse wird geladen …</p></div>
 <script src="config.js"></script>
-<script src="demo-daten.js"></script>
+<script>if (!(window.KASSE_CONFIG && window.KASSE_CONFIG.API_URL)) document.write('<script src="demo-daten.js"><\/script><script src="demo-server.js"><\/script><script src="demo-gs.js"><\/script>');</script>
 <script src="app.js"></script>
+<script src="leitung.js"></script>
+<script src="verwaltung.js"></script>
 </body>
 </html>
