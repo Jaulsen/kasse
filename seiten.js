@@ -52,27 +52,9 @@ P.bons = {
   bind: root => bindConfirm(root, stornoEnqueue)
 };
 
-/* ---------- Ausverkauft melden / Verfügbarkeit ---------- */
-P.verfuegbarkeit = {
-  stand: true,
-  titel: () => leitet() ? 'Verfügbarkeit' : 'Ausverkauft melden',
-  body: () => {
-    const l = leitet();
-    return sortimentFor(stand()).map(p => {
-      const v = availOf(S.stand_id, p.produkt_id);
-      return `<div class="availrow"><div class="hd"><b>${esc(p.name)}</b>${!l && v !== 'verfuegbar' ? `<span class="pill st">${v === 'ausverkauft' ? 'ausverkauft' : 'ausgeblendet'}</span>` : ''}</div>${l
-        ? `<div class="seg avail">${[['verfuegbar', 'da'], ['ausverkauft', 'ausverkauft'], ['nicht_da', 'ausblenden']].map(([k, t]) => `<button data-v="${k}" data-p="${esc(p.produkt_id)}" aria-pressed="${v === k}">${t}</button>`).join('')}</div>`
-        : v === 'verfuegbar' ? `<button class="mini-btn" style="align-self:flex-start;margin:0" data-v="ausverkauft" data-p="${esc(p.produkt_id)}">Ausverkauft</button>` : ''}</div>`;
-    }).join('') || listeLeer('Keine Produkte');
-  },
-  bind: root => root.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => {
-    enqueue('Verfuegbarkeit', { stand_id: S.stand_id, produkt_id: b.dataset.p, status: b.dataset.v, geaendert_am: new Date().toISOString() });
-    render();
-  }))
-};
-
 /* ---------- Meine Schichten: eigene Schichten und Eintragen an einem Ort ---------- */
 const STATUS_TEXT = { vorgeschlagen: 'wartet auf Bestätigung', verknuepfung: 'Zuordnung offen', abgelehnt: 'abgelehnt' };
+const statusText = s => s.status === 'vorgeschlagen' && s.ersetzt ? 'Wechsel angefragt' : STATUS_TEXT[s.status];
 const kommendeTage = st => (st && st.standzeiten || []).filter(z => z.datum >= today());
 P.schichten = {
   get form() { return !!ui.sf; },
@@ -84,7 +66,7 @@ P.schichten = {
       const jetzt = s.datum === today() && nowMin() >= toMin(s.von) && nowMin() <= toMin(s.bis);
       return `<div class="schicht${jetzt ? ' jetzt' : ''}${s.status !== 'geplant' ? ' offen' : ''}">
         <div class="sd"><b>${tagText(s.datum)}</b><span class="num">${s.von}–${s.bis}</span></div>
-        <div class="si"><b>${esc(s.aufgabe)}</b><span>${esc(standName(s.stand_id))}${STATUS_TEXT[s.status] ? ' · ' + STATUS_TEXT[s.status] : jetzt ? ' · jetzt' : ''}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</span></div>
+        <div class="si"><b>${esc(s.aufgabe)}</b><span>${esc(standName(s.stand_id))}${statusText(s) ? ' · ' + statusText(s) : jetzt ? ' · jetzt' : ''}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</span></div>
         ${s.status === 'vorgeschlagen' ? `<button class="del" data-sdel="${esc(s.schicht_id)}" aria-label="Vorschlag zurückziehen">${I.trash}</button>` : ''}</div>`;
     }).join('') : listeLeer('Noch keine Schicht');
     return (ui.sf ? eintragForm() : '') + liste;
@@ -114,7 +96,7 @@ function eintragForm() {
   return `<div class="sform card">
     ${staende.length > 1 ? `<div class="field"><label>Stand</label><div class="chips wrap" id="sf-s">${staende.map(x => `<button class="chip" data-s="${esc(x.stand_id)}" aria-pressed="${x.stand_id === d.stand_id}">${esc(x.name)}</button>`).join('')}</div></div>` : `<b>${esc(st.name)}</b>`}
     <div class="field"><label>Tag</label><div class="chips wrap" id="sf-t">${tage.map(z => `<button class="chip" data-t="${z.datum}" aria-pressed="${z.datum === d.datum}">${tagText(z.datum)}</button>`).join('')}</div></div>
-    <div class="formrow"><div class="field"><label for="sf-von">Von</label><input type="time" id="sf-von" step="900" value="${esc(d.von || sz.von)}"></div><div class="field"><label for="sf-bis">Bis</label><input type="time" id="sf-bis" step="900" value="${esc(d.bis || sz.bis)}"></div></div>
+    ${zeitFeld(d, sz)}
     <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip" data-a="${esc(a)}" aria-pressed="${(d.aufgabe || aufg[0]) === a}">${esc(a)}</button>`).join('')}</div></div>
     <div class="belegt"><small>Schon eingeteilt · Stand offen ${sz.von}–${sz.bis}</small>${belegt.length ? belegt.map(s => `<span>${s.von}–${s.bis} · ${esc(s.aufgabe)} · ${esc(s.name)}</span>`).join('') : '<span>noch niemand</span>'}</div>
     ${ui.sfFehler ? `<p class="err">${esc(ui.sfFehler)}</p>` : ''}
@@ -122,17 +104,21 @@ function eintragForm() {
 }
 function bindEintragForm(f) {
   const d = ui.sf;
-  const erfassen = () => { d.von = val(f, '#sf-von'); d.bis = val(f, '#sf-bis'); const a = f.querySelector('#sf-a [aria-pressed="true"]'); if (a) d.aufgabe = a.dataset.a; };
-  f.querySelectorAll('#sf-s [data-s]').forEach(b => b.addEventListener('click', () => { erfassen(); d.stand_id = b.dataset.s; d.von = d.bis = null; render(); }));
-  f.querySelectorAll('#sf-t [data-t]').forEach(b => b.addEventListener('click', () => { erfassen(); d.datum = b.dataset.t; d.von = d.bis = null; render(); }));
+  const sz = () => kommendeTage(stand(d.stand_id)).find(z => z.datum === d.datum) || { von: '10:00', bis: '14:00' };
+  const erfassen = () => { zeitLesen(f, d, sz()); const a = f.querySelector('#sf-a [aria-pressed="true"]'); if (a) d.aufgabe = a.dataset.a; };
+  fehlerWeg(f, 'sfFehler');
+  f.querySelectorAll('#sf-z [data-z]').forEach(b => b.addEventListener('click', () => { erfassen(); d.ganz = b.dataset.z === '1'; render(); }));
+  f.querySelectorAll('#sf-s [data-s]').forEach(b => b.addEventListener('click', () => { erfassen(); d.stand_id = b.dataset.s; d.von = d.bis = null; if (d.ganz === false) d.ganz = undefined; render(); }));
+  f.querySelectorAll('#sf-t [data-t]').forEach(b => b.addEventListener('click', () => { erfassen(); d.datum = b.dataset.t; d.von = d.bis = null; if (d.ganz === false) d.ganz = undefined; render(); }));
   f.querySelectorAll('#sf-a [data-a]').forEach(b => b.addEventListener('click', () => f.querySelectorAll('#sf-a [data-a]').forEach(x => x.setAttribute('aria-pressed', x === b))));
   f.querySelector('[data-x="abbr"]').addEventListener('click', () => { ui.sf = null; render(); });
   f.querySelector('[data-x="spe"]').addEventListener('click', () => {
     erfassen();
     const schicht = { schicht_id: uid().replace(/-/g, '').slice(0, 10), stand_id: d.stand_id, datum: d.datum, von: d.von, bis: d.bis, aufgabe: d.aufgabe, benutzer_id: S.user.benutzer_id };
-    const u = ueberschneidung(S.user.benutzer_id, d.datum, d.von, d.bis, '');
-    ui.sfFehler = !d.von || !d.bis || toMin(d.bis) <= toMin(d.von) ? 'Zeiten prüfen.' : u ? 'Du bist zu dieser Zeit schon eingeteilt: ' + u.von + '–' + u.bis + ' ' + standName(u.stand_id) + '.' : null;
+    ui.sfFehler = !d.von || !d.bis || toMin(d.bis) <= toMin(d.von) ? 'Zeiten prüfen.' : null;
     if (ui.sfFehler) return render();
+    const alte = ueberschneidungen(S.user.benutzer_id, d.datum, d.von, d.bis, '');
+    if (alte.length) { ui.konflikt = { schicht, alte, name: S.user.name, form: 'sf' }; return go('konflikt'); }
     aktion('schicht_speichern', { schicht });
     ui.sf = null; render();
     toast(leitet(d.stand_id) ? 'Eingetragen' : 'Eingetragen · wartet auf Bestätigung');
@@ -149,9 +135,58 @@ function planTage() {
   (D.schichten || []).forEach(s => { if (s.stand_id === planSid() && !tage.includes(s.datum)) tage.push(s.datum); });
   return tage.filter(d => d >= t).sort().concat(tage.filter(d => d < t).sort().reverse()).filter((d, i, a) => a.indexOf(d) === i);
 }
-function ueberschneidung(benutzerId, datum, von, bis, ausser) {
-  return (D.schichten || []).find(s => s.benutzer_id === benutzerId && s.schicht_id !== ausser && s.datum === datum && s.status !== 'abgelehnt' && toMin(s.von) < toMin(bis) && toMin(s.bis) > toMin(von));
+function ueberschneidungen(benutzerId, datum, von, bis, ausser) {
+  const aus = [].concat(ausser || []);
+  return (D.schichten || []).filter(s => benutzerId && s.benutzer_id === benutzerId && !aus.includes(s.schicht_id) && s.datum === datum && s.status !== 'abgelehnt' && toMin(s.von) < toMin(bis) && toMin(s.bis) > toMin(von));
 }
+const ueberschneidung = (...a) => ueberschneidungen(...a)[0];
+const schichtKurz = s => `${tagText(s.datum)} ${s.von}–${s.bis} · ${s.aufgabe} · ${standName(s.stand_id)}`;
+
+/* Zeit: ganztägig (Standzeit des Tages) oder eigenes Zeitfenster */
+function zeitFeld(d, sz) {
+  if (d.ganz === undefined) d.ganz = !d.von || (d.von === sz.von && d.bis === sz.bis);
+  return `<div class="field"><label>Zeit</label><div class="seg" id="sf-z"><button data-z="1" aria-pressed="${d.ganz}">Ganztägig ${sz.von}–${sz.bis}</button><button data-z="0" aria-pressed="${!d.ganz}">Zeitfenster</button></div></div>
+    ${d.ganz ? '' : `<div class="formrow"><div class="field"><label for="sf-von">Von</label><input type="time" id="sf-von" step="900" value="${esc(d.von || sz.von)}"></div><div class="field"><label for="sf-bis">Bis</label><input type="time" id="sf-bis" step="900" value="${esc(d.bis || sz.bis)}"></div></div>`}`;
+}
+function zeitLesen(f, d, sz) {
+  if (d.ganz) { d.von = sz.von; d.bis = sz.bis; }
+  else { d.von = val(f, '#sf-von') || d.von; d.bis = val(f, '#sf-bis') || d.bis; }
+}
+/* Fehlermeldung im Formular verschwindet bei der nächsten Eingabe */
+function fehlerWeg(f, key) {
+  const weg = e => { if (e.target.closest('[data-x="spe"]')) return; ui[key] = null; const x = f.querySelector('.err'); if (x) x.remove(); };
+  f.addEventListener('click', weg, true); f.addEventListener('input', weg, true); f.addEventListener('change', weg, true);
+}
+
+/* Konflikt: Person ist zur gleichen Zeit schon eingeteilt */
+function konfliktPlan(k) {
+  const ich = S.user.benutzer_id;
+  const direkt = k.alte.filter(a => leitet(a.stand_id) || (a.benutzer_id === ich && a.status === 'vorgeschlagen'));
+  const rest = k.alte.filter(a => !direkt.includes(a));
+  const anfrage = rest.length === 1 && rest[0].benutzer_id === ich;
+  return { direkt, rest, moeglich: !rest.length || anfrage, anfrage };
+}
+function konfliktLoesen() {
+  const k = ui.konflikt, p = konfliktPlan(k);
+  p.direkt.forEach(a => aktion('schicht_loeschen', { schicht_id: a.schicht_id }));
+  if (p.anfrage) k.schicht.ersetzt = p.rest[0].schicht_id;
+  aktion('schicht_speichern', { schicht: k.schicht });
+  ui[k.form] = null; ui.konflikt = null; ui.overlay = null; render();
+  toast(p.anfrage ? 'Wechsel angefragt' : leitet(k.schicht.stand_id) ? 'Gespeichert' : 'Eingetragen · wartet auf Bestätigung');
+}
+OV.konflikt = {
+  titel: () => 'Schon eingeteilt',
+  body: () => {
+    const k = ui.konflikt, p = konfliktPlan(k);
+    return `<p style="margin:0"><b>${esc(k.name)}</b> ist zu dieser Zeit schon eingeteilt:</p>
+      ${k.alte.map(a => `<div class="belegt"><span><b>${esc(schichtKurz(a))}</b>${a.status !== 'geplant' ? ' · ' + (a.status === 'vorgeschlagen' ? 'Vorschlag' : 'offen') : ''}</span></div>`).join('')}
+      <p style="margin:0">Neu: ${esc(schichtKurz(k.schicht))}</p>
+      ${p.moeglich ? (p.anfrage ? '<p class="muted" style="margin:0">Die Standleitung muss den Wechsel bestätigen. Bis dahin gilt die alte Schicht.</p>' : '')
+        : `<p class="err" style="margin:0">Nur die Leitung von ${esc([...new Set(p.rest.map(a => standName(a.stand_id)))].join(', '))} kann diese Schicht ändern.</p>`}`;
+  },
+  footer: () => { const p = konfliktPlan(ui.konflikt); return `<button class="btn ghost" data-close>Abbrechen</button>${p.moeglich ? `<button class="btn" style="flex:1" data-x="ok">${p.anfrage ? 'Wechsel anfragen' : 'Alte verwerfen, neue übernehmen'}</button>` : ''}`; },
+  bind: root => { const b = root.querySelector('[data-x="ok"]'); if (b) b.addEventListener('click', konfliktLoesen); }
+};
 P.plan = {
   stand: false,
   eltern: () => ui.planStand ? 'struktur' : null,
@@ -182,7 +217,7 @@ P.plan = {
       const offen = ui.planForm && ui.planForm.schicht_id === s.schicht_id;
       return `<div class="srow${s.status !== 'geplant' ? ' offen' : ''}${mein ? ' mein' : ''}${offen ? ' sel' : ''}"${l || (mein && s.status === 'vorgeschlagen') ? ` data-sed="${esc(s.schicht_id)}" role="button" tabindex="0"` : ''}>
         <div class="sl"><b>${esc(s.name)}${s.platzhalter ? ' <span class="pill q">Platzhalter</span>' : ''}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</b>
-          <small>${esc(s.aufgabe)} · ${s.von}–${s.bis}${STATUS_TEXT[s.status] ? ' · ' + STATUS_TEXT[s.status] : ''}</small></div>
+          <small>${esc(s.aufgabe)} · ${s.von}–${s.bis}${statusText(s) ? ' · ' + statusText(s) : ''}</small></div>
         <div class="track"><span class="blk" style="left:${pct(toMin(s.von))};width:calc(${pct(toMin(s.bis))} - ${pct(toMin(s.von))});background:${aufgabeFarbe(s.aufgabe)}"></span>${nowLine}</div>
         ${l && (s.status === 'vorgeschlagen' || s.status === 'verknuepfung') ? `<div class="acts"><button class="btn sm" data-ok="${esc(s.schicht_id)}|${s.status}">${s.status === 'vorgeschlagen' ? 'Bestätigen' : 'Zuordnen'}</button><button class="btn ghost sm" data-no="${esc(s.schicht_id)}|${s.status}">${s.status === 'vorgeschlagen' ? 'Ablehnen' : 'Trennen'}</button></div>` : ''}
       </div>${offen ? schichtForm() : ''}`;
@@ -206,7 +241,7 @@ P.plan = {
     root.querySelectorAll('[data-ok],[data-no]').forEach(b => b.addEventListener('click', () => {
       const ja = !!b.dataset.ok, [id, st] = (b.dataset.ok || b.dataset.no).split('|');
       const s = D.schichten.find(x => x.schicht_id === id);
-      if (ja && s && ueberschneidung(s.benutzer_id, s.datum, s.von, s.bis, s.schicht_id)) return toast(esc(s.name) + ' ist zu dieser Zeit schon eingeteilt');
+      if (ja && s && ueberschneidung(s.benutzer_id, s.datum, s.von, s.bis, [s.schicht_id, s.ersetzt])) return toast(esc(s.name) + ' ist zu dieser Zeit schon eingeteilt');
       aktion('hinweis_aktion', { typ: st === 'vorgeschlagen' ? 'schicht' : 'verknuepfung', id, aktion2: ja ? 'ja' : 'nein' });
       render();
     }));
@@ -217,22 +252,26 @@ P.plan = {
 function schichtForm() {
   const d = ui.planForm, l = leitet(planSid()), st = stand(planSid());
   const sz = (st.standzeiten || []).find(z => z.datum === ui.planTag) || { von: '10:00', bis: '14:00' };
-  const personen = (D.personen || []);
+  const tagSchichten = (D.schichten || []).filter(s => s.datum === ui.planTag && s.status !== 'abgelehnt' && s.schicht_id !== d.schicht_id);
+  const personen = (D.personen || []).map(p => { const x = tagSchichten.filter(s => s.benutzer_id === p.benutzer_id); return [p.benutzer_id, p.name + (x.length ? ' · eingeteilt ' + x.map(s => s.von + '–' + s.bis + (s.stand_id !== planSid() ? ' ' + standName(s.stand_id) : '')).join(', ') : '')]; });
   const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung' || (l && d.modus !== 'p'));
   return `<div class="sform card">
     <b>${d.schicht_id ? 'Schicht ändern' : l ? 'Neue Schicht' : 'Mich eintragen'} · ${tagText(ui.planTag)}</b>
     ${l ? `<div class="seg" id="sf-m"><button data-m="b" aria-pressed="${d.modus !== 'p'}">Person</button><button data-m="p" aria-pressed="${d.modus === 'p'}">Platzhalter</button></div>
-      ${d.modus !== 'p' ? `<div class="field"><select id="sf-b" aria-label="Person">${optionen(personen.map(p => [p.benutzer_id, p.name]), d.benutzer_id || S.user.benutzer_id)}</select></div>`
+      ${d.modus !== 'p' ? `<div class="field"><select id="sf-b" aria-label="Person">${optionen(personen, d.benutzer_id || S.user.benutzer_id)}</select></div>`
         : `<div class="field"><input id="sf-p" placeholder="Name" value="${esc(d.platzhalter && d.name ? d.name : '')}" aria-label="Platzhalter"></div>`}` : ''}
-    <div class="formrow"><div class="field"><label for="sf-von">Von</label><input type="time" id="sf-von" step="900" value="${esc(d.von || sz.von)}"></div><div class="field"><label for="sf-bis">Bis</label><input type="time" id="sf-bis" step="900" value="${esc(d.bis || sz.bis)}"></div></div>
+    ${zeitFeld(d, sz)}
     <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip" data-a="${esc(a)}" aria-pressed="${(d.aufgabe || aufg.find(x => x !== 'Standleitung')) === a}">${esc(a)}</button>`).join('')}</div></div>
     ${ui.planFehler ? `<p class="err">${esc(ui.planFehler)}</p>` : ''}
     <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button>${d.schicht_id ? `<button class="btn ghost sm danger-t" data-x="del">Löschen</button>` : ''}<button class="btn sm" style="margin-left:auto" data-x="spe">${l ? 'Speichern' : d.schicht_id ? 'Ändern' : 'Vorschlagen'}</button></div></div>`;
 }
 function bindSchichtForm(f) {
   const d = ui.planForm;
+  const st = stand(planSid()), sz = (st.standzeiten || []).find(z => z.datum === ui.planTag) || { von: '10:00', bis: '14:00' };
+  fehlerWeg(f, 'planFehler');
+  f.querySelectorAll('#sf-z [data-z]').forEach(b => b.addEventListener('click', () => { erfassen(); d.ganz = b.dataset.z === '1'; render(); }));
   const erfassen = () => {
-    d.von = val(f, '#sf-von'); d.bis = val(f, '#sf-bis');
+    zeitLesen(f, d, sz);
     const a = f.querySelector('#sf-a [aria-pressed="true"]'); if (a) d.aufgabe = a.dataset.a;
     if (f.querySelector('#sf-b')) d.benutzer_id = val(f, '#sf-b');
     if (f.querySelector('#sf-p')) d.name = val(f, '#sf-p');
@@ -251,11 +290,12 @@ function bindSchichtForm(f) {
     else schicht.benutzer_id = d.benutzer_id;
     const fehler = !schicht.von || !schicht.bis || toMin(schicht.bis) <= toMin(schicht.von) ? 'Zeiten prüfen.'
       : !schicht.aufgabe ? 'Aufgabe wählen.'
-      : l && d.modus === 'p' && schicht.platzhalter.length < 2 ? 'Name fehlt.'
-      : (() => { const u = ueberschneidung(schicht.benutzer_id, schicht.datum, schicht.von, schicht.bis, schicht.schicht_id); return u ? 'Zu dieser Zeit schon eingeteilt: ' + u.von + '–' + u.bis + ' ' + standName(u.stand_id) + '.' : ''; })();
+      : l && d.modus === 'p' && schicht.platzhalter.length < 2 ? 'Name fehlt.' : '';
     if (fehler) { ui.planFehler = fehler; return render(); }
     const person = (D.personen || []).find(p => p.benutzer_id === schicht.benutzer_id);
     if (schicht.aufgabe === 'Standleitung' && (d.modus === 'p' || !person || ROLLEN[person.rolle] < 2)) { ui.rollePerson = d.modus === 'p' ? null : person; return go('rolle'); }
+    const alte = ueberschneidungen(schicht.benutzer_id, schicht.datum, schicht.von, schicht.bis, schicht.schicht_id);
+    if (alte.length) { ui.konflikt = { schicht, alte, name: person ? person.name : S.user.name, form: 'planForm' }; return go('konflikt'); }
     aktion('schicht_speichern', { schicht });
     ui.planForm = null; ui.planFehler = null; render();
     toast(l ? 'Gespeichert' : 'Vorgeschlagen');

@@ -4,7 +4,7 @@
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
 const DEMO = !API;
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
@@ -176,6 +176,7 @@ function lokal(en) {
     D.hinweise = (D.hinweise || []).filter(h => !(h.typ === d.typ && h.id === d.id));
     if (d.typ === 'schicht' || d.typ === 'verknuepfung') {
       const s = (D.schichten || []).find(x => x.schicht_id === d.id);
+      if (s && d.aktion2 === 'ja' && s.ersetzt) { const alt = s.ersetzt; s.ersetzt = ''; D.schichten = D.schichten.filter(x => x.schicht_id !== alt); }
       if (s) { if (d.aktion2 === 'ja') s.status = 'geplant'; else if (d.typ === 'schicht') s.status = 'abgelehnt'; else { s.status = 'geplant'; s.benutzer_id = ''; s.platzhalter = true; } }
     }
     if (d.typ === 'ausverkauft' && d.aktion2 === 'nein') { const [sid, pid] = d.id.split('|'); D.verfuegbarkeit = (D.verfuegbarkeit || []).filter(v => !(v.stand_id === sid && v.produkt_id === pid)); }
@@ -437,7 +438,7 @@ function eintrag(name, ic, text, badge) {
 /* Seitenleiste: Bereich der eigenen Rolle oben und offen, Tieferes darunter zum Aufklappen */
 function gruppen() {
   const l = leitet(), mitStand = !!S.stand_id, r = rang();
-  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], mitStand && ['verfuegbarkeit', I.box, l ? 'Verfügbarkeit' : 'Ausverkauft melden'], ['schichten', I.clock, 'Meine Schichten']].filter(Boolean);
+  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], ['schichten', I.clock, 'Meine Schichten']].filter(Boolean);
   const stl = [l && ['plan', I.cal, 'Personalplanung'], ['personal', I.users, 'Personalverwaltung'], l && ['uebersicht', I.chart, 'Umsatz heute'],
     l && ['standbons', I.receipt, 'Bons & Storno des Stands'], l && ['nachtrag', I.plus, 'Nachtrag erfassen'], l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean);
   const mkt = [['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'], ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']];
@@ -671,7 +672,8 @@ function kasse() {
   const sortiment = sortimentFor(st);
   const cats = [...new Set(sortiment.map(p => p.kategorie))];
   if (ui.kat !== 'Alle' && !cats.includes(ui.kat)) ui.kat = 'Alle';
-  let items = sortiment.filter(p => availOf(st.stand_id, p.produkt_id) !== 'nicht_da');
+  const lt = leitet();
+  let items = sortiment.filter(p => lt || availOf(st.stand_id, p.produkt_id) !== 'nicht_da');
   const q = ui.q.trim().toLowerCase();
   if (q) items = items.filter(p => p.name.toLowerCase().includes(q));
   else if (ui.kat !== 'Alle') items = items.filter(p => p.kategorie === ui.kat);
@@ -680,11 +682,11 @@ function kasse() {
   for (const p of items) {
     if (grouped && p.kategorie !== last) { grid += `<div class="grouphead">${esc(p.kategorie)}</div>`; last = p.kategorie; }
     const n = S.cart[p.produkt_id] || 0, pr = preis(p, st);
-    const out = availOf(st.stand_id, p.produkt_id) === 'ausverkauft';
+    const av = availOf(st.stand_id, p.produkt_id), out = av !== 'verfuegbar';
     const src = p.bild ? imgUrl('bilder', p.bild) : '';
-    const info = p.bild || p.beschreibung || (p.info && p.info.length);
+    const info = true;
     grid += `<div class="cell"><button class="tile${n ? ' in' : ''}${out ? ' out' : ''}" data-p="${esc(p.produkt_id)}" aria-label="${esc(p.name)}, ${eur(pr)}${n ? ', ' + n + ' im Warenkorb' : ''}${out ? ', ausverkauft' : ''}">
-      <span class="pic" style="background:${esc(kat(p.kategorie).farbe || '#5E6A61')}">${src ? `<img src="${src}" alt="">` : esc(initials(p.name))}${out ? '<span class="tag">ausverkauft</span>' : ''}</span>
+      <span class="pic" style="background:${esc(kat(p.kategorie).farbe || '#5E6A61')}">${src ? `<img src="${src}" alt="">` : esc(initials(p.name))}${out ? `<span class="tag">${av === 'nicht_da' ? 'ausgeblendet' : 'ausverkauft'}</span>` : ''}</span>
       ${n ? `<span class="qty num">${n}</span>` : ''}
       <span class="tx"><span class="nm">${esc(p.name)}</span><span class="pr num${pr < 0 ? ' neg' : ''}">${eur(pr)}</span></span>
     </button>${info ? `<button class="info" data-info="${esc(p.produkt_id)}" aria-label="Infos zu ${esc(p.name)}">i</button>` : ''}${n ? `<button class="tiledel" data-tdel="${esc(p.produkt_id)}" aria-label="${esc(p.name)} entfernen">${I.trash}</button>` : ''}</div>`;
@@ -727,7 +729,7 @@ function kasse() {
   }];
 }
 function change(pid, d) {
-  if (d > 0 && availOf(S.stand_id, pid) === 'ausverkauft') return toast('Ausverkauft');
+  if (d > 0 && availOf(S.stand_id, pid) !== 'verfuegbar') return go('info', pid);
   const n = Math.max(0, (S.cart[pid] || 0) + d);
   if (n) S.cart[pid] = n; else delete S.cart[pid];
   render();
@@ -827,13 +829,23 @@ OV.info = {
     const pics = [];
     if (p.bild) pics.push({ src: imgUrl('bilder', p.bild), name: p.name });
     (p.info || []).filter(i => i.typ === 'bild').forEach(i => pics.push({ src: imgUrl('info', i.name), name: i.name }));
-    return `<div class="infohead"><b class="num">${eur(preis(p))}</b><span class="muted">${esc(p.kategorie)}${out ? ' · ausverkauft' : ''}</span></div>
+    const av = availOf(S.stand_id, p.produkt_id);
+    const verf = leitet()
+      ? `<div class="seg avail">${[['verfuegbar', 'Verfügbar'], ['ausverkauft', 'Ausverkauft'], ['nicht_da', 'Ausblenden']].map(([k, t]) => `<button data-v="${k}" aria-pressed="${av === k}">${t}</button>`).join('')}</div>`
+      : av === 'verfuegbar' ? '<button class="btn ghost wide" data-v="ausverkauft">Ausverkauft melden</button>' : '<div class="info-msg">Ausverkauft gemeldet</div>';
+    return `<div class="infohead"><b class="num">${eur(preis(p))}</b><span class="muted">${esc(p.kategorie)}</span></div>
+      ${verf}
       ${pics.length ? `<div class="gallery">${pics.map(x => `<figure>${x.src ? `<button class="zoom" data-zoom="${esc(x.src)}"><img src="${x.src}" alt="${esc(x.name)}"></button>` : `<div class="ph">${ladeHtml}</div>`}</figure>`).join('')}</div>` : ''}
       ${p.beschreibung ? `<p class="desc">${esc(p.beschreibung)}</p>` : ''}
       ${(p.info || []).filter(i => i.typ === 'dok').map(d => d.url ? `<a class="doc" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="ic">PDF</span><span>${esc(d.name)}</span></a>` : `<div class="doc"><span class="ic">PDF</span><span>${esc(d.name)}</span></div>`).join('')}`;
   },
-  footer: () => `<button class="btn ghost" data-close>Schließen</button>${rang() >= 3 ? '<button class="btn blue" data-x="edit">Bearbeiten</button>' : ''}<button class="btn" style="flex:1" data-x="add" ${availOf(S.stand_id, ui.info) === 'ausverkauft' ? 'disabled' : ''}>+ 1</button>`,
+  footer: () => `<button class="btn ghost" data-close>Schließen</button>${rang() >= 3 ? '<button class="btn blue" data-x="edit">Bearbeiten</button>' : ''}<button class="btn" style="flex:1" data-x="add" ${availOf(S.stand_id, ui.info) !== 'verfuegbar' ? 'disabled' : ''}>+ 1</button>`,
   bind: root => {
+    root.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => {
+      enqueue('Verfuegbarkeit', { stand_id: S.stand_id, produkt_id: ui.info, status: b.dataset.v, geaendert_am: new Date().toISOString() });
+      if (b.dataset.v !== 'verfuegbar') delete S.cart[ui.info];
+      render(); toast(b.dataset.v === 'verfuegbar' ? 'Wieder verfügbar' : b.dataset.v === 'ausverkauft' ? 'Als ausverkauft gemeldet' : 'Ausgeblendet');
+    }));
     root.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => { ui.zoom = b.dataset.zoom; go('bild'); }));
     const add = root.querySelector('[data-x="add"]'); if (add) add.addEventListener('click', () => { ui.overlay = null; change(ui.info, +1); });
     const ed = root.querySelector('[data-x="edit"]'); if (ed) ed.addEventListener('click', () => { ui.overlay = null; openProdukt(ui.info, null); });

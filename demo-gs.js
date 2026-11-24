@@ -2,14 +2,14 @@
 window.__GS = (function () {
 /**
  * Weihnachtsmarkt-Kasse – Google-Schnittstelle
- * Version 2.1 · 2026-11-24
+ * Version 2.3 · 2026-11-24
  *
  * Gehört in das Apps-Script-Projekt am Google Sheet (Erweiterungen › Apps Script).
  * Fehlende Tabs und Spalten legt die Schnittstelle selbst an; ein Sheet aus
  * Version 1.x wird beim ersten Aufruf automatisch umgestellt (Märkte › Stände).
  */
 
-const VERSION = '2.1';
+const VERSION = '2.3';
 const TZ = 'Europe/Berlin';
 const MAX_DATEI_BYTES = 350000;
 const PUFFER_MIN = 30;
@@ -25,7 +25,7 @@ const TABS = {
   'Preise': ['markt_id', 'produkt_id', 'preis', 'geaendert_von', 'geaendert_am'],
   'Benutzer': ['benutzer_id', 'name', 'registriert_am', 'geraet_id', 'rolle', 'aktiv', 'pin_hash', 'pin_fehler', 'pin_gesperrt_bis', 'eingeladen_von'],
   'Einladungen': ['token', 'name', 'erstellt_von', 'erstellt_am', 'gueltig_bis', 'eingeloest_von'],
-  'Schichten': ['schicht_id', 'stand_id', 'datum', 'von', 'bis', 'aufgabe', 'benutzer_id', 'platzhalter', 'status', 'erstellt_von'],
+  'Schichten': ['schicht_id', 'stand_id', 'datum', 'von', 'bis', 'aufgabe', 'benutzer_id', 'platzhalter', 'status', 'erstellt_von', 'ersetzt'],
   'Verfügbarkeit': ['stand_id', 'produkt_id', 'status', 'geaendert_von', 'geaendert_am', 'geprueft'],
   'Zugangscodes': ['code', 'stand_id', 'datum', 'erstellt_von', 'erstellt_am', 'eingeloest_von', 'geraet_id', 'eingeloest_am', 'entzogen_am', 'entzogen_von'],
   'Verkäufe': ['bon_id', 'zeit', 'stand_id', 'benutzer_id', 'geraet_id', 'anzahl_artikel', 'summe', 'gegeben', 'rueckgeld', 'status', 'art', 'empfangen_am', 'hinweis', 'bestaetigt_von', 'bestaetigt_am'],
@@ -507,7 +507,7 @@ function schichtenFuer_(b, staende) {
   staende.forEach(function (s) { sichtbar[s.stand_id] = true; });
   return tab_('Schichten').zeilen.filter(function (z) { return sichtbar[txt_(z.stand_id)] && tag_(z.datum) >= ab && (txt_(z.status) !== 'abgelehnt' || standRecht_(b, z.stand_id)); }).map(function (z) {
     return { schicht_id: txt_(z.schicht_id), stand_id: txt_(z.stand_id), datum: tag_(z.datum), von: uhr_(z.von), bis: uhr_(z.bis), aufgabe: txt_(z.aufgabe),
-      benutzer_id: txt_(z.benutzer_id), name: txt_(z.benutzer_id) ? (namen[txt_(z.benutzer_id)] || '?') : name_(z.platzhalter), platzhalter: !txt_(z.benutzer_id), status: txt_(z.status) || 'geplant' };
+      benutzer_id: txt_(z.benutzer_id), name: txt_(z.benutzer_id) ? (namen[txt_(z.benutzer_id)] || '?') : name_(z.platzhalter), platzhalter: !txt_(z.benutzer_id), status: txt_(z.status) || 'geplant', ersetzt: txt_(z.ersetzt) };
   });
 }
 
@@ -727,7 +727,8 @@ function plan_(p) {
 function ueberschneidung_(benutzerId, datum, von, bis, ausser) {
   if (!benutzerId) return null;
   return tab_('Schichten').zeilen.filter(function (z) {
-    return txt_(z.benutzer_id) === txt_(benutzerId) && txt_(z.schicht_id) !== txt_(ausser) && tag_(z.datum) === datum &&
+    const aus = [].concat(ausser || []).map(txt_);
+    return txt_(z.benutzer_id) === txt_(benutzerId) && aus.indexOf(txt_(z.schicht_id)) < 0 && tag_(z.datum) === datum &&
       ['abgelehnt'].indexOf(txt_(z.status)) < 0 && minuten_(uhr_(z.von)) < minuten_(bis) && minuten_(uhr_(z.bis)) > minuten_(von);
   })[0] || null;
 }
@@ -755,10 +756,16 @@ function schichtSpeichern_(p) {
       if (rang_(ziel) < 2) throw new Error('Standleitung nur für Personen mit dieser Rolle.');
     }
     if (!benutzerId && txt_(d.aufgabe) === 'Standleitung') throw new Error('Standleitung nur für angemeldete Personen.');
-    const werte = { stand_id: d.stand_id, datum: alsText_(txt_(d.datum)), von: alsText_(uhr_(d.von)), bis: alsText_(uhr_(d.bis)), aufgabe: txt_(d.aufgabe), benutzer_id: benutzerId, platzhalter: platzhalter, status: status };
+    // Wechsel: eine eigene, schon geplante Schicht soll durch diese ersetzt werden (die Leitung bestätigt)
+    let ersetzt = '';
+    if (txt_(d.ersetzt)) {
+      const alt = t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(d.ersetzt); })[0];
+      if (alt && txt_(alt.benutzer_id) === benutzerId) ersetzt = txt_(alt.schicht_id);
+    }
+    const werte = { stand_id: d.stand_id, datum: alsText_(txt_(d.datum)), von: alsText_(uhr_(d.von)), bis: alsText_(uhr_(d.bis)), aufgabe: txt_(d.aufgabe), benutzer_id: benutzerId, platzhalter: platzhalter, status: status, ersetzt: ersetzt };
     let z = txt_(d.schicht_id) ? t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(d.schicht_id); })[0] : null;
     if (z && !leitung && txt_(z.benutzer_id) !== txt_(b.benutzer_id)) throw new Error('Keine Berechtigung.');
-    ueberschneidungPruefen_(benutzerId, txt_(d.datum), uhr_(d.von), uhr_(d.bis), d.schicht_id);
+    ueberschneidungPruefen_(benutzerId, txt_(d.datum), uhr_(d.von), uhr_(d.bis), [d.schicht_id, ersetzt]);
     if (z) Object.keys(werte).forEach(function (k) { setzen_(t, z, k, werte[k]); });
     else z = anhaengen_(t, [Object.assign({ schicht_id: txt_(d.schicht_id) || Utilities.getUuid().slice(0, 8), erstellt_von: txt_(b.benutzer_id) }, werte)])[0];
     if (platzhalter && !benutzerId) {
@@ -815,7 +822,7 @@ function hinweisListe_(b) {
     if (st !== 'vorgeschlagen' && st !== 'verknuepfung') return;
     out.push({ typ: st === 'vorgeschlagen' ? 'schicht' : 'verknuepfung', id: txt_(z.schicht_id),
       titel: (namen[txt_(z.benutzer_id)] || '') + ' · ' + txt_(z.aufgabe),
-      text: (st === 'vorgeschlagen' ? 'Vorschlag ' : 'Platzhalter „' + name_(z.platzhalter) + '“ · ') + tag_(z.datum).split('-').reverse().slice(0, 2).join('.') + '. ' + uhr_(z.von) + '–' + uhr_(z.bis),
+      text: (st === 'vorgeschlagen' ? (txt_(z.ersetzt) ? 'Wechsel ' : 'Vorschlag ') : 'Platzhalter „' + name_(z.platzhalter) + '“ · ') + kurzTag_(z.datum) + ' ' + uhr_(z.von) + '–' + uhr_(z.bis) + wechselText_(z),
       stand: standName[txt_(z.stand_id)] });
   });
   // Produktvorschläge
@@ -829,6 +836,14 @@ function hinweisListe_(b) {
     out.push({ typ: 'rueckmeldung', id: txt_(z.rm_id), titel: txt_(z.typ) + ' · ' + (namen[txt_(z.benutzer_id)] || ''), text: txt_(z.text), stand: standName[txt_(z.stand_id)], zeit: iso_(z.zeit) });
   });
   return out;
+}
+function kurzTag_(d) { return tag_(d).split('-').reverse().slice(0, 2).join('.') + '.'; }
+function wechselText_(z) {
+  if (!txt_(z.ersetzt)) return '';
+  const alt = tab_('Schichten').zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(z.ersetzt); })[0];
+  if (!alt) return '';
+  const s = stand_(alt.stand_id);
+  return ' · statt ' + kurzTag_(alt.datum) + ' ' + uhr_(alt.von) + '–' + uhr_(alt.bis) + ' ' + txt_(alt.aufgabe) + (s ? ' (' + txt_(s.name) + ')' : '');
 }
 function hinweise_(p) { const b = auth_(p, 2); return { ok: true, hinweise: hinweisListe_(b) }; }
 
@@ -862,7 +877,13 @@ function hinweisAktion_(p) {
       const z = t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(p.id); })[0];
       if (!z) throw new Error('Nicht gefunden.');
       standPruefen_(b, z.stand_id);
-      if (ja) { ueberschneidungPruefen_(z.benutzer_id, tag_(z.datum), uhr_(z.von), uhr_(z.bis), z.schicht_id); setzen_(t, z, 'status', 'geplant'); }
+      if (ja) {
+        ueberschneidungPruefen_(z.benutzer_id, tag_(z.datum), uhr_(z.von), uhr_(z.bis), [z.schicht_id, z.ersetzt]);
+        const altId = txt_(z.ersetzt);
+        setzen_(t, z, 'status', 'geplant'); setzen_(t, z, 'ersetzt', '');
+        const alt = altId ? t.zeilen.filter(function (x) { return txt_(x.schicht_id) === altId; })[0] : null;
+        if (alt) loeschen_(t, alt);
+      }
       else if (p.typ === 'schicht') setzen_(t, z, 'status', 'abgelehnt');
       else { setzen_(t, z, 'benutzer_id', ''); setzen_(t, z, 'status', 'geplant'); }
     } else if (p.typ === 'produkt') {
