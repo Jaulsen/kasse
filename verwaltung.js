@@ -296,7 +296,7 @@ function katForm() {
 P.personen = {
   key: 'personen',
   titel: 'Personen & Rollen',
-  open: () => { ui.offen = null; ui.uq = ''; laden('personen', { aktion: 'benutzer_liste' }); },
+  open: data => { ui.offen = data && data.offen || null; ui.uq = ''; laden('personen', { aktion: 'benutzer_liste' }); },
   body: () => `<label class="search">${I.search}<input id="uq" type="search" placeholder="Suchen" value="${esc(ui.uq || '')}" aria-label="Person suchen"></label>` + geladen('personen', x => {
     const q = (ui.uq || '').toLowerCase();
     const admin = rang() >= 4;

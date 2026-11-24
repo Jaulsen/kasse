@@ -71,22 +71,73 @@ P.verfuegbarkeit = {
   }))
 };
 
-/* ---------- Meine Schichten ---------- */
-const STATUS_TEXT = { vorgeschlagen: 'Vorschlag', verknuepfung: 'Zuordnung offen', abgelehnt: 'abgelehnt' };
-P.meineschichten = {
+/* ---------- Meine Schichten: eigene Schichten und Eintragen an einem Ort ---------- */
+const STATUS_TEXT = { vorgeschlagen: 'wartet auf Bestätigung', verknuepfung: 'Zuordnung offen', abgelehnt: 'abgelehnt' };
+const kommendeTage = st => (st && st.standzeiten || []).filter(z => z.datum >= today());
+P.schichten = {
+  get form() { return !!ui.sf; },
   titel: 'Meine Schichten',
+  open: () => { ui.sf = null; ui.sfFehler = null; },
   body: () => {
-    const l = (D.schichten || []).filter(s => s.benutzer_id === S.user.benutzer_id && s.datum >= today()).sort((a, b) => (a.datum + a.von).localeCompare(b.datum + b.von));
-    if (!l.length) return listeLeer('Keine Schichten') + (S.stand_id ? '<button class="btn ghost wide" data-go="plan">Zum Schichtplan</button>' : '');
-    let tag = null;
-    return l.map(s => {
-      const kopf = s.datum !== tag ? `<h3 class="sub">${tagText(s.datum)}</h3>` : ''; tag = s.datum;
+    const meine = (D.schichten || []).filter(s => s.benutzer_id === S.user.benutzer_id && s.datum >= today()).sort((a, b) => (a.datum + a.von).localeCompare(b.datum + b.von));
+    const liste = meine.length ? meine.map(s => {
       const jetzt = s.datum === today() && nowMin() >= toMin(s.von) && nowMin() <= toMin(s.bis);
-      return kopf + `<div class="card${jetzt ? ' jetzt' : ''}"><div class="hd"><b class="num">${s.von}–${s.bis}</b>${STATUS_TEXT[s.status] ? `<span class="pill q">${STATUS_TEXT[s.status]}</span>` : jetzt ? '<span class="pill ok">jetzt</span>' : ''}</div>
-        <span>${esc(s.aufgabe)} · ${esc(standName(s.stand_id))}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</span></div>`;
-    }).join('') + (S.stand_id ? '<button class="btn ghost wide" data-go="plan">Zum Schichtplan</button>' : '');
+      return `<div class="schicht${jetzt ? ' jetzt' : ''}${s.status !== 'geplant' ? ' offen' : ''}">
+        <div class="sd"><b>${tagText(s.datum)}</b><span class="num">${s.von}–${s.bis}</span></div>
+        <div class="si"><b>${esc(s.aufgabe)}</b><span>${esc(standName(s.stand_id))}${STATUS_TEXT[s.status] ? ' · ' + STATUS_TEXT[s.status] : jetzt ? ' · jetzt' : ''}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</span></div>
+        ${s.status === 'vorgeschlagen' ? `<button class="del" data-sdel="${esc(s.schicht_id)}" aria-label="Vorschlag zurückziehen">${I.trash}</button>` : ''}</div>`;
+    }).join('') : listeLeer('Noch keine Schicht');
+    return (ui.sf ? eintragForm() : '') + liste;
+  },
+  leiste: () => ui.sf ? '' : '<button class="btn wide" data-neu>Schicht eintragen</button>',
+  bind: root => {
+    const n = root.querySelector('[data-neu]');
+    if (n) n.addEventListener('click', () => {
+      const offen = STAENDE().filter(st => kommendeTage(st).length);
+      const st = offen.find(x => x.stand_id === S.stand_id) || offen[0];
+      if (!st) return toast('Keine Standzeiten geplant');
+      const z = kommendeTage(st)[0];
+      ui.sf = { stand_id: st.stand_id, datum: z.datum }; ui.sfFehler = null; render();
+      const pb = app.querySelector('#pb'); if (pb) pb.scrollTop = 0;
+    });
+    root.querySelectorAll('[data-sdel]').forEach(b => b.addEventListener('click', () => { aktion('schicht_loeschen', { schicht_id: b.dataset.sdel }); render(); toast('Zurückgezogen'); }));
+    const f = root.querySelector('.sform'); if (f) bindEintragForm(f);
   }
 };
+function eintragForm() {
+  const d = ui.sf, st = stand(d.stand_id), tage = kommendeTage(st);
+  if (!tage.some(z => z.datum === d.datum)) d.datum = tage[0] ? tage[0].datum : today();
+  const sz = tage.find(z => z.datum === d.datum) || { von: '10:00', bis: '14:00' };
+  const staende = STAENDE().filter(x => kommendeTage(x).length);
+  const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung');
+  const belegt = (D.schichten || []).filter(s => s.stand_id === d.stand_id && s.datum === d.datum && s.status !== 'abgelehnt').sort((a, b) => a.von.localeCompare(b.von));
+  return `<div class="sform card">
+    ${staende.length > 1 ? `<div class="field"><label>Stand</label><div class="chips wrap" id="sf-s">${staende.map(x => `<button class="chip" data-s="${esc(x.stand_id)}" aria-pressed="${x.stand_id === d.stand_id}">${esc(x.name)}</button>`).join('')}</div></div>` : `<b>${esc(st.name)}</b>`}
+    <div class="field"><label>Tag</label><div class="chips wrap" id="sf-t">${tage.map(z => `<button class="chip" data-t="${z.datum}" aria-pressed="${z.datum === d.datum}">${tagText(z.datum)}</button>`).join('')}</div></div>
+    <div class="formrow"><div class="field"><label for="sf-von">Von</label><input type="time" id="sf-von" step="900" value="${esc(d.von || sz.von)}"></div><div class="field"><label for="sf-bis">Bis</label><input type="time" id="sf-bis" step="900" value="${esc(d.bis || sz.bis)}"></div></div>
+    <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip" data-a="${esc(a)}" aria-pressed="${(d.aufgabe || aufg[0]) === a}">${esc(a)}</button>`).join('')}</div></div>
+    <div class="belegt"><small>Schon eingeteilt · Stand offen ${sz.von}–${sz.bis}</small>${belegt.length ? belegt.map(s => `<span>${s.von}–${s.bis} · ${esc(s.aufgabe)} · ${esc(s.name)}</span>`).join('') : '<span>noch niemand</span>'}</div>
+    ${ui.sfFehler ? `<p class="err">${esc(ui.sfFehler)}</p>` : ''}
+    <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="spe">Eintragen</button></div></div>`;
+}
+function bindEintragForm(f) {
+  const d = ui.sf;
+  const erfassen = () => { d.von = val(f, '#sf-von'); d.bis = val(f, '#sf-bis'); const a = f.querySelector('#sf-a [aria-pressed="true"]'); if (a) d.aufgabe = a.dataset.a; };
+  f.querySelectorAll('#sf-s [data-s]').forEach(b => b.addEventListener('click', () => { erfassen(); d.stand_id = b.dataset.s; d.von = d.bis = null; render(); }));
+  f.querySelectorAll('#sf-t [data-t]').forEach(b => b.addEventListener('click', () => { erfassen(); d.datum = b.dataset.t; d.von = d.bis = null; render(); }));
+  f.querySelectorAll('#sf-a [data-a]').forEach(b => b.addEventListener('click', () => f.querySelectorAll('#sf-a [data-a]').forEach(x => x.setAttribute('aria-pressed', x === b))));
+  f.querySelector('[data-x="abbr"]').addEventListener('click', () => { ui.sf = null; render(); });
+  f.querySelector('[data-x="spe"]').addEventListener('click', () => {
+    erfassen();
+    const schicht = { schicht_id: uid().replace(/-/g, '').slice(0, 10), stand_id: d.stand_id, datum: d.datum, von: d.von, bis: d.bis, aufgabe: d.aufgabe, benutzer_id: S.user.benutzer_id };
+    const u = ueberschneidung(S.user.benutzer_id, d.datum, d.von, d.bis, '');
+    ui.sfFehler = !d.von || !d.bis || toMin(d.bis) <= toMin(d.von) ? 'Zeiten prüfen.' : u ? 'Du bist zu dieser Zeit schon eingeteilt: ' + u.von + '–' + u.bis + ' ' + standName(u.stand_id) + '.' : null;
+    if (ui.sfFehler) return render();
+    aktion('schicht_speichern', { schicht });
+    ui.sf = null; render();
+    toast(leitet(d.stand_id) ? 'Eingetragen' : 'Eingetragen · wartet auf Bestätigung');
+  });
+}
 
 /* ---------- Schichtplan / Personalplanung ---------- */
 const AUFGABE_FARBE = ['#1F6E24', '#2158A1', '#A8352A', '#B07A2A', '#6B4FA0', '#2E8A8A', '#8B5A2B'];
@@ -171,7 +222,7 @@ function schichtForm() {
   return `<div class="sform card">
     <b>${d.schicht_id ? 'Schicht ändern' : l ? 'Neue Schicht' : 'Mich eintragen'} · ${tagText(ui.planTag)}</b>
     ${l ? `<div class="seg" id="sf-m"><button data-m="b" aria-pressed="${d.modus !== 'p'}">Person</button><button data-m="p" aria-pressed="${d.modus === 'p'}">Platzhalter</button></div>
-      ${d.modus !== 'p' ? `<div class="field"><select id="sf-b" aria-label="Person">${optionen(personen.map(p => [p.benutzer_id, p.name + (ROLLEN[p.rolle] >= 2 ? ' · ' + p.rolle : '')]), d.benutzer_id || S.user.benutzer_id)}</select></div>`
+      ${d.modus !== 'p' ? `<div class="field"><select id="sf-b" aria-label="Person">${optionen(personen.map(p => [p.benutzer_id, p.name]), d.benutzer_id || S.user.benutzer_id)}</select></div>`
         : `<div class="field"><input id="sf-p" placeholder="Name" value="${esc(d.platzhalter && d.name ? d.name : '')}" aria-label="Platzhalter"></div>`}` : ''}
     <div class="formrow"><div class="field"><label for="sf-von">Von</label><input type="time" id="sf-von" step="900" value="${esc(d.von || sz.von)}"></div><div class="field"><label for="sf-bis">Bis</label><input type="time" id="sf-bis" step="900" value="${esc(d.bis || sz.bis)}"></div></div>
     <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip" data-a="${esc(a)}" aria-pressed="${(d.aufgabe || aufg.find(x => x !== 'Standleitung')) === a}">${esc(a)}</button>`).join('')}</div></div>
@@ -201,9 +252,10 @@ function bindSchichtForm(f) {
     const fehler = !schicht.von || !schicht.bis || toMin(schicht.bis) <= toMin(schicht.von) ? 'Zeiten prüfen.'
       : !schicht.aufgabe ? 'Aufgabe wählen.'
       : l && d.modus === 'p' && schicht.platzhalter.length < 2 ? 'Name fehlt.'
-      : schicht.aufgabe === 'Standleitung' && ROLLEN[((D.personen || []).find(p => p.benutzer_id === schicht.benutzer_id) || {}).rolle] < 2 ? 'Standleitung nur für Personen mit dieser Rolle.'
       : (() => { const u = ueberschneidung(schicht.benutzer_id, schicht.datum, schicht.von, schicht.bis, schicht.schicht_id); return u ? 'Zu dieser Zeit schon eingeteilt: ' + u.von + '–' + u.bis + ' ' + standName(u.stand_id) + '.' : ''; })();
     if (fehler) { ui.planFehler = fehler; return render(); }
+    const person = (D.personen || []).find(p => p.benutzer_id === schicht.benutzer_id);
+    if (schicht.aufgabe === 'Standleitung' && (d.modus === 'p' || !person || ROLLEN[person.rolle] < 2)) { ui.rollePerson = d.modus === 'p' ? null : person; return go('rolle'); }
     aktion('schicht_speichern', { schicht });
     ui.planForm = null; ui.planFehler = null; render();
     toast(l ? 'Gespeichert' : 'Vorgeschlagen');

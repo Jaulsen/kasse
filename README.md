@@ -21,4 +21,4 @@ Die Google-Schnittstelle (`Code.gs`) liegt nicht hier, sondern im Apps-Script-Pr
 
 Repository › Settings › Pages › Source: *Deploy from a branch*, Branch `main`, Ordner `/ (root)`.
 
-Version 2.1 · November 2026
+Version 2.2 · November 2026

@@ -4,7 +4,7 @@
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
 const DEMO = !API;
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
@@ -355,7 +355,8 @@ function render() {
 
   const st = stand(), m = marktVon(st);
   app.innerHTML = `<header class="top">
-      <button class="where" data-home aria-label="Zur Kasse">
+      <button class="logo" data-home aria-label="Zur Kasse"><img src="icon-192.png" alt=""></button>
+      <button class="where" data-ort aria-label="${esc(ortZiel()[1])}">
         <small>${esc(m ? m.name : S.user.name)}</small><span>${esc(st ? st.name : 'Stand wählen')}</span></button>
       ${chipHtml()}
       ${rang() >= 2 ? `<button class="iconbtn bellbtn${hinweisZahl() ? ' neu' : ''}" data-go="hinweise" aria-label="${hinweisZahl() ? hinweisZahl() + ' Nachrichten' : 'Nachrichten'}">${I.bell}${hinweisZahl() ? `<span class="badge">${hinweisZahl()}</span>` : ''}</button>` : ''}
@@ -363,8 +364,10 @@ function render() {
     </header>
     ${main}
     ${ui.drawer ? drawerHtml() : ''}`;
+  if (!ui.drawer) ui.drawerShown = false;
   bindMain(app);
   app.querySelector('[data-home]').addEventListener('click', home);
+  app.querySelector('[data-ort]').addEventListener('click', () => { const z = ortZiel()[0]; z ? go(z) : home(); });
   app.querySelector('[data-burger]').addEventListener('click', () => { ui.drawer = !ui.drawer; if (ui.drawer && !ui.acc) ui.acc = accFuer(ui.page); render(); });
   app.querySelectorAll('.top [data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
   if (ui.drawer) bindDrawer();
@@ -374,6 +377,14 @@ function render() {
   if (pos.page === ui.page) restore('#pb', pos.pb);
   if (pos.ov === ui.overlay) restore('.sheet .body', pos.sb);
   render.page = ui.page; render.ov = ui.overlay;
+}
+
+/* Tipp auf Markt/Stand oben: führt je nach Rolle an die passende Stelle */
+function ortZiel() {
+  if (!S.stand_id) return [null, 'Stand wählen'];
+  if (rang() >= 3) return ['struktur', 'Märkte & Stände'];
+  if (leitet()) return ['standedit', 'Stand einrichten'];
+  return ['schichten', 'Meine Schichten'];
 }
 
 /* Seite: Kopf mit Titel (und Zurück bei Unterseiten), Inhalt, feste Leiste unten */
@@ -423,29 +434,24 @@ function toast(msg) {
 function eintrag(name, ic, text, badge) {
   return `<button class="ditem${ui.page === name || (!ui.page && name === 'kasse') ? ' aktiv' : ''}" data-dgo="${name}"><span class="ic">${ic}</span><span>${esc(text)}</span>${badge ? `<span class="dbadge">${badge}</span>` : ''}</button>`;
 }
+/* Seitenleiste: Bereich der eigenen Rolle oben und offen, Tieferes darunter zum Aufklappen */
 function gruppen() {
-  const l = leitet(), mitStand = !!S.stand_id;
-  const g = [];
-  g.push({ titel: 'Verkauf', items: [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], mitStand && ['verfuegbarkeit', I.box, l ? 'Verfügbarkeit' : 'Ausverkauft melden']].filter(Boolean) });
-  g.push({ titel: 'Schichten', items: [['meineschichten', I.clock, 'Meine Schichten'], mitStand && !l && ['plan', I.cal, 'Schichtplan']].filter(Boolean) });
-  if (rang() >= 2) g.push({ acc: 'standleitung', titel: 'Standleitung', ic: I.user, items: [
-    l && ['plan', I.cal, 'Personalplanung'],
-    ['personal', I.users, 'Personalverwaltung'],
-    l && ['uebersicht', I.chart, 'Umsatz heute'],
-    l && ['standbons', I.receipt, 'Bons & Storno des Stands'],
-    l && ['nachtrag', I.plus, 'Nachtrag erfassen'],
-    l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean) });
-  if (rang() >= 3) g.push({ acc: 'marktleitung', titel: 'Marktleitung', ic: I.pin, items: [
-    ['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'],
-    ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']] });
-  if (rang() >= 4) g.push({ acc: 'admin', titel: 'Admin', ic: I.gear, items: [['einstellungen', I.gear, 'Einstellungen']] });
-  return g;
+  const l = leitet(), mitStand = !!S.stand_id, r = rang();
+  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], mitStand && ['verfuegbarkeit', I.box, l ? 'Verfügbarkeit' : 'Ausverkauft melden'], ['schichten', I.clock, 'Meine Schichten']].filter(Boolean);
+  const stl = [l && ['plan', I.cal, 'Personalplanung'], ['personal', I.users, 'Personalverwaltung'], l && ['uebersicht', I.chart, 'Umsatz heute'],
+    l && ['standbons', I.receipt, 'Bons & Storno des Stands'], l && ['nachtrag', I.plus, 'Nachtrag erfassen'], l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean);
+  const mkt = [['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'], ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']];
+  if (r >= 4) mkt.push(['einstellungen', I.gear, 'Einstellungen']);
+  if (r <= 1) return [{ titel: 'Verkauf & Schichten', items: verkauf }];
+  if (r === 2) return [{ titel: 'Standleitung · ' + (standName() || 'kein Stand'), items: stl }, { acc: 'verkauf', titel: 'Verkauf & Schichten', ic: I.cart, items: verkauf }];
+  return [{ titel: r >= 4 ? 'Admin & Marktleitung' : 'Marktleitung', items: mkt }, { acc: 'standleitung', titel: 'Standleitung', ic: I.user, items: stl }, { acc: 'verkauf', titel: 'Verkauf & Schichten', ic: I.cart, items: verkauf }];
 }
 function accFuer(page) { if (!page) return null; const g = gruppen().find(x => x.acc && x.items.some(i => i[0] === page)); return g ? g.acc : null; }
 function drawerHtml() {
   const st = stand();
   const standListe = MAERKTE().map(m => ({ m, st: STAENDE().filter(s => s.markt_id === m.markt_id) })).filter(x => x.st.length);
-  return `<div class="dscrim" data-dscrim><nav class="drawer" aria-label="Menü">
+  const anim = !ui.drawerShown; ui.drawerShown = true;
+  return `<div class="dscrim${anim ? ' anim' : ''}" data-dscrim><nav class="drawer" aria-label="Menü">
     <div class="dhead"><b>${esc(S.user.name)}</b><small>${esc(role())}</small></div>
     <div class="dbody">
       <div class="dacc${ui.acc === 'stand' ? ' offen' : ''}">
@@ -455,7 +461,7 @@ function drawerHtml() {
       ${gruppen().map(g => g.acc
         ? (g.items.length ? `<div class="dacc${ui.acc === g.acc ? ' offen' : ''}"><button class="dacchead" data-acc="${g.acc}"><span class="ic">${g.ic}</span><span>${esc(g.titel)}</span>${I.down}</button>
             ${ui.acc === g.acc ? `<div class="daccbody">${g.items.map(i => eintrag(...i)).join('')}</div>` : ''}</div>` : '')
-        : (g.items.length ? `<h4>${esc(g.titel)}</h4>${g.items.map(i => eintrag(...i)).join('')}` : '')).join('')}
+        : (g.items.length ? `<h4>${esc(g.titel)}</h4><div class="dsec">${g.items.map(i => eintrag(...i)).join('')}</div>` : '')).join('')}
     <div class="dfoot">
       ${eintrag('feedback', I.chat, 'Rückmeldung')}${eintrag('anzeige', I.eye, 'Anzeige')}
       <button class="ditem" data-logout><span class="ic">${I.out}</span><span>Abmelden</span></button>
@@ -639,13 +645,13 @@ function codeAnsicht() {
     ${err || ui.codeErr ? `<p class="err">${esc(err || ui.codeErr)}</p>` : ''}
     <button class="btn wide" type="submit">Freischalten</button>
     ${meine.length ? `<p class="muted center">Deine Schicht: ${meine.slice(0, 2).map(s => (s.datum === today() ? 'heute' : fmtDate(s.datum)) + ' ' + s.von + '–' + s.bis).join(', ')}</p>` : ''}
-    <button class="btn ghost wide" type="button" data-go="plan">Schichtplan</button>
+    <button class="btn ghost wide" type="button" data-go="schichten">Meine Schichten</button>
   </form></div></section>`;
   return [html, root => {
     const inp = root.querySelector('#c-in');
     if (!ui.drawer && !ui.overlay) inp.focus();
     root.querySelector('#codeform').addEventListener('submit', e => { e.preventDefault(); tue(e.submitter || root.querySelector('#codeform [type=submit]'), () => redeem(inp.value.replace(/\D/g, ''))); });
-    root.querySelector('[data-go="plan"]').addEventListener('click', () => go('plan'));
+    root.querySelector('[data-go="schichten"]').addEventListener('click', () => go('schichten'));
   }];
 }
 async function redeem(code) {
@@ -801,6 +807,15 @@ function saveBon() {
   else if (total < 0) toast(`<b class="neg-t">↑ ${eur(-total)} auszahlen</b>`);
   else toast(bon.rueckgeld ? `Rückgeld <b>${eur(bon.rueckgeld)}</b>` : 'Gespeichert');
 }
+
+/* Hinweis, wenn die Aufgabe Standleitung nicht zur Rolle passt */
+OV.rolle = {
+  zurueck: () => null,
+  titel: () => 'Rolle passt nicht',
+  body: () => `<p style="margin:0">${ui.rollePerson ? `<b>${esc(ui.rollePerson.name)}</b> hat die Rolle ${esc(ui.rollePerson.rolle)}.` : 'Ein Platzhalter hat noch keine Rolle.'} Die Aufgabe Standleitung braucht mindestens die Rolle Standleitung.</p>`,
+  footer: () => `<button class="btn ghost" data-close>Schließen</button>${rang() >= 3 && ui.rollePerson ? '<button class="btn" style="flex:1" data-x="rollen">Zur Rollenverteilung</button>' : ''}`,
+  bind: root => { const b = root.querySelector('[data-x="rollen"]'); if (b) b.addEventListener('click', () => { ui.overlay = null; go('personen', { offen: ui.rollePerson.benutzer_id }); }); }
+};
 
 /* ---------- Info und Bild ---------- */
 OV.info = {
