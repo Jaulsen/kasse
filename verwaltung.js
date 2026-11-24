@@ -32,8 +32,7 @@ P.standedit = {
         <button class="chip" data-kat="ALLE" aria-pressed="${alle}">Alle</button>
         ${KATS().map(k => `<button class="chip" data-kat="${esc(k.kategorie)}" aria-pressed="${!alle && se.kategorien.includes(k.kategorie)}">${esc(k.kategorie)}</button>`).join('')}</div>
       ${se.personen ? `<h3 class="sub">Standleitung</h3><div class="chips wrap">${se.personen.filter(p => ROLLEN[p.rolle] >= 2).map(p => `<button class="chip" data-sl="${esc(p.benutzer_id)}" aria-pressed="${se.leitung.includes(p.benutzer_id)}">${esc(p.name)}</button>`).join('') || '<span class="muted">Niemand mit Rolle Standleitung</span>'}</div>` : ''}
-      ${se.stand_id ? `<h3 class="sub">Weiteres</h3><div class="menu">${preisKategorien(se).length ? `<button class="item" data-x="preise"><span class="ic">${I.euro}</span><span>Preise für diesen Markt</span></button>` : ''}
-        <button class="item" data-x="vorschlag"><span class="ic">${I.plus}</span><span>${rang() >= 3 ? 'Neues Produkt' : 'Produkt vorschlagen'}</span></button></div>
+      ${se.stand_id ? `${preisKategorien(se).length ? `<div class="menu"><button class="item" data-x="preise"><span class="ic">${I.euro}</span><span>Preise für diesen Markt</span></button></div>` : ''}
         ${ui.confirm === 'arch' ? `<div class="confirm">Stand archivieren? <button class="btn danger sm" data-x="archja">Ja</button><button class="btn ghost sm" data-nein>Nein</button></div>` : '<button class="btn ghost wide danger-t" data-x="arch">Stand archivieren</button>'}` : ''}`;
   },
   leiste: () => '<button class="btn wide" data-x="spe">Speichern</button>',
@@ -56,7 +55,6 @@ P.standedit = {
     }));
     root.querySelectorAll('[data-sl]').forEach(b => b.addEventListener('click', () => { seErfassen(root); const id = b.dataset.sl; se.leitung = se.leitung.includes(id) ? se.leitung.filter(y => y !== id) : se.leitung.concat(id); render(); }));
     x('preise', () => { seErfassen(root); go('preise'); });
-    x('vorschlag', () => { seErfassen(root); openProdukt(null, 'standedit'); });
     x('arch', () => { seErfassen(root); ui.confirm = 'arch'; render(); });
     root.querySelectorAll('[data-nein]').forEach(b => b.addEventListener('click', () => { seErfassen(root); ui.confirm = null; render(); }));
     const speichern = async archiviert => {
@@ -117,7 +115,8 @@ P.struktur = {
     return `${aktiv.map(m => `<div class="card">
       <div class="hd"><b>${esc(m.name)}</b>${m.recht ? `<button class="mini-btn" data-med="${esc(m.markt_id)}">Bearbeiten</button>` : ''}</div>
       <span class="muted">${esc([m.ort, m.datum_von && fmtDate(m.datum_von) + (m.datum_bis && m.datum_bis !== m.datum_von ? ' – ' + fmtDate(m.datum_bis) : '')].filter(Boolean).join(' · '))}${m.leitung.length ? ' · Leitung: ' + esc(m.leitung.map(l => l.name).join(', ')) : ''}${m.archiviert ? ' · archiviert' : ''}</span>
-      ${x.staende.filter(s => s.markt_id === m.markt_id && (!s.archiviert || ui.zeigeArchiv)).map(s => `<button class="srow-btn" data-sted="${esc(s.stand_id)}"><b>${esc(s.name)}</b><small>${esc(s.leitung.map(l => l.name).join(', ') || 'ohne Standleitung')}${s.archiviert ? ' · archiviert' : ''}</small></button>`).join('')}
+      ${x.staende.filter(s => s.markt_id === m.markt_id && (!s.archiviert || ui.zeigeArchiv)).map(s => `<div class="srow-btn"><div><b>${esc(s.name)}</b><small>${esc(s.leitung.map(l => l.name).join(', ') || 'ohne Standleitung')}${s.archiviert ? ' · archiviert' : ''}</small></div>
+        ${s.recht ? `<div class="acts">${!s.archiviert && stand(s.stand_id) ? `<button class="mini-btn" data-spl="${esc(s.stand_id)}">${I.cal} Personalplanung</button>` : ''}<button class="mini-btn" data-sted="${esc(s.stand_id)}">${I.edit} Einrichten</button></div>` : ''}</div>`).join('')}
       ${m.recht ? `<button class="mini-btn" style="margin:0;align-self:flex-start" data-mned="${esc(m.markt_id)}">+ Stand</button>` : ''}</div>`).join('') || listeLeer('Kein Markt')}
       <button class="mini-btn" style="margin:0" data-archiv>${ui.zeigeArchiv ? 'Archiv ausblenden' : 'Archiv zeigen'}</button>`;
   }),
@@ -127,6 +126,7 @@ P.struktur = {
     root.querySelector('[data-neu]').addEventListener('click', () => { ui.me = { markt_id: '', name: '', ort: '', datum_von: today(), datum_bis: today(), archiviert: false, leitung: [], leitungAlt: [] }; go('marktedit'); });
     const ar = root.querySelector('[data-archiv]'); if (ar) ar.addEventListener('click', () => { ui.zeigeArchiv = !ui.zeigeArchiv; render(); });
     root.querySelectorAll('[data-sted]').forEach(b => b.addEventListener('click', () => { const s = x.staende.find(y => y.stand_id === b.dataset.sted); if (s.recht) { standDaten(s, 'struktur', x.personen); go('standedit', true); } }));
+    root.querySelectorAll('[data-spl]').forEach(b => b.addEventListener('click', () => go('plan', { stand_id: b.dataset.spl })));
     root.querySelectorAll('[data-mned]').forEach(b => b.addEventListener('click', () => { ui.neuMarkt = b.dataset.mned; standDaten(null, 'struktur', x.personen); go('standedit', true); }));
     root.querySelectorAll('[data-med]').forEach(b => b.addEventListener('click', () => { const m = x.maerkte.find(y => y.markt_id === b.dataset.med); ui.me = Object.assign({}, m, { leitung: m.leitung.map(l => l.benutzer_id) }); ui.me.leitungAlt = ui.me.leitung.slice(); go('marktedit'); }));
   }
@@ -264,7 +264,7 @@ P.produkt = {
 /* ---------- Kategorien ---------- */
 P.kategorien = {
   get form() { return !!ui.ke; },
-  titel: 'Kategorien & Preise',
+  titel: 'Kategorien',
   open: () => { ui.ke = null; },
   body: () => `<p class="muted" style="margin:0">Preis je Markt: Die Standleitung legt die Preise dieser Kategorie für ihren Markt fest.</p>` +
     KATS().slice().sort((a, b) => a.sortierung - b.sortierung).map(k => ui.ke && ui.ke.alt === k.kategorie ? katForm() :

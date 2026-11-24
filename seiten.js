@@ -91,19 +91,23 @@ P.meineschichten = {
 /* ---------- Schichtplan / Personalplanung ---------- */
 const AUFGABE_FARBE = ['#1F6E24', '#2158A1', '#A8352A', '#B07A2A', '#6B4FA0', '#2E8A8A', '#8B5A2B'];
 const aufgabeFarbe = a => AUFGABE_FARBE[Math.max(0, (D.aufgaben || []).indexOf(a)) % AUFGABE_FARBE.length];
+const planSid = () => ui.planStand || S.stand_id;
 function planTage() {
-  const st = stand(); const t = today();
+  const st = stand(planSid()); const t = today();
   const tage = (st.standzeiten || []).map(z => z.datum);
-  (D.schichten || []).forEach(s => { if (s.stand_id === S.stand_id && !tage.includes(s.datum)) tage.push(s.datum); });
+  (D.schichten || []).forEach(s => { if (s.stand_id === planSid() && !tage.includes(s.datum)) tage.push(s.datum); });
   return tage.filter(d => d >= t).sort().concat(tage.filter(d => d < t).sort().reverse()).filter((d, i, a) => a.indexOf(d) === i);
 }
 function ueberschneidung(benutzerId, datum, von, bis, ausser) {
   return (D.schichten || []).find(s => s.benutzer_id === benutzerId && s.schicht_id !== ausser && s.datum === datum && s.status !== 'abgelehnt' && toMin(s.von) < toMin(bis) && toMin(s.bis) > toMin(von));
 }
 P.plan = {
-  stand: true,
-  titel: () => leitet() ? 'Personalplanung' : 'Schichtplan',
+  stand: false,
+  eltern: () => ui.planStand ? 'struktur' : null,
+  titel: () => (leitet(planSid()) ? 'Personalplanung' : 'Schichtplan') + (ui.planStand ? ' · ' + standName(ui.planStand) : ''),
   open: data => {
+    if (!(data && data.zurueck)) ui.planStand = data && data.stand_id || null;
+    if (!planSid() || !stand(planSid())) { ui.planStand = null; }
     const tage = planTage();
     if (!ui.planTag || !tage.includes(ui.planTag)) ui.planTag = tage[0] || today();
     ui.planForm = data && data.benutzer_id ? { benutzer_id: data.benutzer_id, modus: 'b' } : null;
@@ -111,9 +115,10 @@ P.plan = {
   },
   get form() { return !!ui.planForm; },
   body: () => {
-    const st = stand(), l = leitet(), tage = planTage(), tag = ui.planTag;
+    if (!planSid()) return listeLeer('Erst einen Stand wählen');
+    const st = stand(planSid()), l = leitet(planSid()), tage = planTage(), tag = ui.planTag;
     const sz = (st.standzeiten || []).find(z => z.datum === tag);
-    const liste = (D.schichten || []).filter(s => s.stand_id === S.stand_id && s.datum === tag && (l || s.status !== 'abgelehnt'))
+    const liste = (D.schichten || []).filter(s => s.stand_id === planSid() && s.datum === tag && (l || s.status !== 'abgelehnt'))
       .sort((a, b) => a.von.localeCompare(b.von) || a.aufgabe.localeCompare(b.aufgabe));
     let a = sz ? toMin(sz.von) : 10 * 60, e = sz ? toMin(sz.bis) : 20 * 60;
     liste.forEach(s => { a = Math.min(a, toMin(s.von)); e = Math.max(e, toMin(s.bis)); });
@@ -137,7 +142,7 @@ P.plan = {
       ${neuOffen ? schichtForm() : ''}
       ${liste.length ? `<div class="scale">${stunden.map(h => `<span style="left:${pct(h * 60)}">${h}</span>`).join('')}</div>${liste.map(zeile).join('')}` : listeLeer('Noch niemand eingeteilt')}`;
   },
-  leiste: () => ui.planForm ? '' : `<button class="btn wide" data-neu>${leitet() ? 'Schicht hinzufügen' : 'Mich eintragen'}</button>`,
+  leiste: () => ui.planForm || !planSid() ? '' : `<button class="btn wide" data-neu>${leitet(planSid()) ? 'Schicht hinzufügen' : 'Mich eintragen'}</button>`,
   bind: root => {
     root.querySelectorAll('[data-tag]').forEach(b => b.addEventListener('click', () => { ui.planTag = b.dataset.tag; ui.planForm = null; render(); }));
     const neu = root.querySelector('[data-neu]'); if (neu) neu.addEventListener('click', () => { ui.planForm = { modus: 'b' }; ui.planFehler = null; render(); root = app.querySelector('.page'); const pb = app.querySelector('#pb'); if (pb) pb.scrollTop = 0; });
@@ -159,7 +164,7 @@ P.plan = {
   }
 };
 function schichtForm() {
-  const d = ui.planForm, l = leitet(), st = stand();
+  const d = ui.planForm, l = leitet(planSid()), st = stand(planSid());
   const sz = (st.standzeiten || []).find(z => z.datum === ui.planTag) || { von: '10:00', bis: '14:00' };
   const personen = (D.personen || []);
   const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung' || (l && d.modus !== 'p'));
@@ -188,8 +193,8 @@ function bindSchichtForm(f) {
   if (del) del.addEventListener('click', () => { aktion('schicht_loeschen', { schicht_id: d.schicht_id }); ui.planForm = null; render(); toast('Gelöscht'); });
   f.querySelector('[data-x="spe"]').addEventListener('click', () => {
     erfassen();
-    const l = leitet();
-    const schicht = { schicht_id: d.schicht_id || uid().replace(/-/g, '').slice(0, 10), stand_id: S.stand_id, datum: ui.planTag, von: d.von, bis: d.bis, aufgabe: d.aufgabe };
+    const l = leitet(planSid());
+    const schicht = { schicht_id: d.schicht_id || uid().replace(/-/g, '').slice(0, 10), stand_id: planSid(), datum: ui.planTag, von: d.von, bis: d.bis, aufgabe: d.aufgabe };
     if (!l) schicht.benutzer_id = S.user.benutzer_id;
     else if (d.modus === 'p') { schicht.platzhalter = (d.name || '').replace(/\s+/g, ' '); schicht.benutzer_id = ''; }
     else schicht.benutzer_id = d.benutzer_id;
@@ -212,7 +217,7 @@ const HINWEIS_KNOEPFE = {
 };
 const HINWEIS_TITEL = { registrierung: 'Registrierungen', schicht: 'Schichtvorschläge', verknuepfung: 'Platzhalter zuordnen', bon: 'Umsätze außerhalb der Regeln', ausverkauft: 'Ausverkauft gemeldet', produkt: 'Produktvorschläge', rueckmeldung: 'Rückmeldungen' };
 P.hinweise = {
-  titel: 'Zu bestätigen',
+  titel: 'Nachrichten',
   body: () => {
     const l = D.hinweise || [];
     if (!l.length) return `<div class="leer-ok">${I.check}<p>Alles erledigt</p></div>`;
@@ -243,29 +248,47 @@ P.uebersicht = {
   })
 };
 
-/* ---------- Codes & Freischaltung ---------- */
+/* ---------- Personalverwaltung: freischalten und einladen ---------- */
+const codesLaden = () => leitet() ? laden('personal', { aktion: 'personal', stand_id: S.stand_id }) : null;
 P.personal = {
-  stand: true, key: 'personal',
-  titel: 'Codes & Freischaltung',
-  open: () => { ui.neuerCode = null; laden('personal', { aktion: 'personal', stand_id: S.stand_id }); },
-  body: () => `${ui.neuerCode ? `<div class="codebox"><small>Einmalcode · gilt heute</small><b class="num">${fmtCode(ui.neuerCode)}</b></div>` : ''}
-    <h3 class="sub">Heute vergeben</h3>
-    ${geladen('personal', x => x.codes.length ? x.codes.slice().reverse().map(c => `<div class="card">
+  key: 'personal',
+  get form() { return !!(document.activeElement && document.activeElement.id === 'ei-n'); },
+  titel: 'Personalverwaltung',
+  open: () => { ui.neuerCode = null; ui.einladung = null; codesLaden(); },
+  body: () => `${leitet() ? `<h3 class="sub">Heute freischalten · ${esc(standName())}</h3>
+    ${ui.neuerCode ? `<div class="codebox"><small>Einmalcode · gilt heute</small><b class="num">${fmtCode(ui.neuerCode)}</b></div>` : ''}
+    <button class="btn wide" data-code>Neuen Code erzeugen</button>
+    ${geladen('personal', x => x.codes.slice().reverse().map(c => `<div class="card">
       <div class="hd"><b class="num">${fmtCode(c.code)}</b><span class="pill ${c.entzogen ? 'st' : c.offen ? 'q' : 'ok'}">${c.entzogen ? 'entzogen' : c.offen ? 'offen' : esc(c.eingeloest_name)}</span></div>
       ${!c.entzogen ? `<div class="acts">${ui.confirm === c.code ? `Freischaltung entziehen? <button class="btn danger sm" data-entz="${c.code}">Ja</button><button class="btn ghost sm" data-nein>Nein</button>` : `<button class="mini-btn" data-ask="${c.code}">Entziehen</button>`}
-        ${!c.offen ? `<button class="mini-btn" data-plan="${esc(c.benutzer_id)}">In Plan eintragen</button>` : ''}</div>` : ''}</div>`).join('') : listeLeer('Noch keine Codes'))}`,
-  leiste: () => '<button class="btn wide" data-code>Neuen Code erzeugen</button>',
+        ${!c.offen ? `<button class="mini-btn" data-plan="${esc(c.benutzer_id)}">In Plan eintragen</button>` : ''}</div>` : ''}</div>`).join(''))}` : ''}
+    <h3 class="sub">Neue Person einladen</h3>
+    ${ui.einladung ? `<div class="card"><b>${esc(ui.einladung.name)}</b><span class="muted">Link gilt 24 Stunden · Freigabe danach über die Glocke</span><div class="linkbox">${esc(ui.einladung.url)}</div>
+        <div class="acts"><button class="btn sm" data-teilen>${navigator.share ? 'Link teilen' : 'Link kopieren'}</button><button class="btn ghost sm" data-weitere>Weitere Person</button></div></div>`
+      : `<div class="einlad"><input id="ei-n" placeholder="Name" autocapitalize="words" autocomplete="off" aria-label="Name der Person"><button class="btn sm" data-einladen>Link erstellen</button></div>`}`,
   bind: root => {
     const b = root.querySelector('[data-code]');
-    b.addEventListener('click', () => tue(b, async () => {
+    if (b) b.addEventListener('click', () => tue(b, async () => {
       const r = await call({ aktion: 'code_erzeugen', stand_id: S.stand_id }, true);
-      if (r.ok) { ui.neuerCode = r.code; render(); laden('personal', { aktion: 'personal', stand_id: S.stand_id }); }
+      if (r.ok) { ui.neuerCode = r.code; render(); codesLaden(); }
     }));
-    bindConfirm(root, (code) => {
-      const c = (L.personal.codes || []).find(x => x.code === code); if (c) c.entzogen = true; render();
-      call({ aktion: 'zugang_entziehen', code }, true).then(() => laden('personal', { aktion: 'personal', stand_id: S.stand_id }));
+    bindConfirm(root, code => {
+      const c = ((L.personal || {}).codes || []).find(x => x.code === code); if (c) c.entzogen = true; render();
+      call({ aktion: 'zugang_entziehen', code }, true).then(codesLaden);
     }, 'entz');
     root.querySelectorAll('[data-plan]').forEach(x => x.addEventListener('click', () => go('plan', { benutzer_id: x.dataset.plan })));
+    const e = root.querySelector('[data-einladen]');
+    if (e) e.addEventListener('click', () => {
+      const name = val(root, '#ei-n').replace(/\s+/g, ' '); if (name.length < 2) return toast('Name fehlt');
+      tue(e, async () => { const r = await call({ aktion: 'einladung_erstellen', name }, true); if (r.ok) { ui.einladung = { name: r.name, url: location.origin + location.pathname + '?e=' + r.token }; render(); } });
+    });
+    const w = root.querySelector('[data-weitere]'); if (w) w.addEventListener('click', () => { ui.einladung = null; render(); });
+    const t = root.querySelector('[data-teilen]');
+    if (t) t.addEventListener('click', async () => {
+      const u = ui.einladung.url;
+      if (navigator.share) { try { await navigator.share({ title: E().app_titel, text: 'Einladung für ' + ui.einladung.name, url: u }); } catch (x) {} }
+      else { try { await navigator.clipboard.writeText(u); toast('Kopiert'); } catch (x) { toast('Link markieren und kopieren'); } }
+    });
   }
 };
 
@@ -299,29 +322,6 @@ P.nachtrag = {
     const d = val(root, '#nt-d'), t = val(root, '#nt-t'); if (!d || !t) return;
     S.nachtrag = { zeit: new Date(d + 'T' + t).toISOString(), stand_id: S.stand_id }; S.cart = {}; home();
   })
-};
-
-/* ---------- Person einladen ---------- */
-P.einladen = {
-  form: true,
-  titel: 'Person einladen',
-  open: () => { ui.einladung = null; },
-  body: () => ui.einladung ? `<div class="card"><b>${esc(ui.einladung.name)}</b><span class="muted">Link gilt 24 Stunden · Freigabe danach unter „Zu bestätigen“</span><div class="linkbox">${esc(ui.einladung.url)}</div></div>`
-    : '<div class="field"><label for="ei-n">Name der Person</label><input id="ei-n" autocapitalize="words" autocomplete="off"></div>',
-  leiste: () => ui.einladung ? `<button class="btn ghost" data-x="neu">Weitere Person</button><button class="btn" style="flex:1" data-x="teilen">${navigator.share ? 'Link teilen' : 'Link kopieren'}</button>` : '<button class="btn wide" data-x="ok">Einladungslink erstellen</button>',
-  bind: root => {
-    const x = (k, f) => { const b = root.querySelector(`[data-x="${k}"]`); if (b) b.addEventListener('click', () => f(b)); };
-    x('ok', b => {
-      const name = val(root, '#ei-n').replace(/\s+/g, ' '); if (name.length < 2) return toast('Name fehlt');
-      tue(b, async () => { const r = await call({ aktion: 'einladung_erstellen', name }, true); if (r.ok) { ui.einladung = { name: r.name, url: location.origin + location.pathname + '?e=' + r.token }; render(); } });
-    });
-    x('neu', () => { ui.einladung = null; render(); });
-    x('teilen', async () => {
-      const u = ui.einladung.url;
-      if (navigator.share) { try { await navigator.share({ title: E().app_titel, text: 'Einladung für ' + ui.einladung.name, url: u }); } catch (e) {} }
-      else { try { await navigator.clipboard.writeText(u); toast('Kopiert'); } catch (e) { toast('Link markieren und kopieren'); } }
-    });
-  }
 };
 
 /* ---------- Rückmeldung, Anzeige, Abgleich ---------- */

@@ -276,6 +276,8 @@ const svg = (d, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 const I = {
   menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>', 2.2),
   x: svg('<path d="M6 6l12 12M18 6 6 18"/>', 2.4),
+  netz: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="15" width="3.6" height="5" rx="1"/><rect x="8.5" y="11" width="3.6" height="9" rx="1"/><rect x="14" y="7" width="3.6" height="13" rx="1"/><rect x="19.5" y="3" width="3.6" height="17" rx="1" opacity=".55"/></svg>',
+  netzAus: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="15" width="3.6" height="5" rx="1"/><rect x="8.5" y="11" width="3.6" height="9" rx="1" opacity=".35"/><rect x="14" y="7" width="3.6" height="13" rx="1" opacity=".35"/><path d="M15 3l7 7M22 3l-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
   search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>', 2.2),
   bell: svg('<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>'),
   cart: svg('<path d="M3 4h2l2.4 11h10.2L20 7H6.2"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>'),
@@ -310,11 +312,11 @@ const app = document.getElementById('app');
 const ladeHtml = '<p class="center"><span class="spin"></span></p>';
 const listeLeer = t => `<p class="empty">${esc(t)}</p>`;
 
+/* Verbindungsanzeige: Balken wie beim Handyempfang, Zahl = noch nicht übertragene Einträge */
 function chipHtml() {
-  const n = S.queue.length;
-  if (!online()) return `<button class="sync wait" id="chip" data-go="abgleich">Offline${n ? ' · ' + n : ''}</button>`;
-  if (n) return `<button class="sync wait" id="chip" data-go="abgleich">Übertrage ${n}</button>`;
-  return `<button class="sync" id="chip" data-go="abgleich" aria-label="Abgleich">${net.syncing ? '<span class="spin sm"></span>' : I.check}</button>`;
+  const n = S.queue.length, off = !online();
+  const label = off ? 'Offline' + (n ? ', ' + n + ' wartend' : '') : n ? n + ' werden übertragen' : 'Verbunden, alles übertragen';
+  return `<button class="netz${off ? ' off' : n ? ' wait' : ''}${net.syncing ? ' busy' : ''}" id="chip" data-go="abgleich" aria-label="${label}" title="${label}">${off ? I.netzAus : I.netz}${n ? `<span class="nz num">${n}</span>` : ''}</button>`;
 }
 function paintChip() {
   const c = document.getElementById('chip');
@@ -356,7 +358,7 @@ function render() {
       <button class="where" data-home aria-label="Zur Kasse">
         <small>${esc(m ? m.name : S.user.name)}</small><span>${esc(st ? st.name : 'Stand wählen')}</span></button>
       ${chipHtml()}
-      ${hinweisZahl() ? `<button class="iconbtn bellbtn" data-go="hinweise" aria-label="${hinweisZahl()} Hinweise">${I.bell}<span class="badge">${hinweisZahl()}</span></button>` : ''}
+      ${rang() >= 2 ? `<button class="iconbtn bellbtn${hinweisZahl() ? ' neu' : ''}" data-go="hinweise" aria-label="${hinweisZahl() ? hinweisZahl() + ' Nachrichten' : 'Nachrichten'}">${I.bell}${hinweisZahl() ? `<span class="badge">${hinweisZahl()}</span>` : ''}</button>` : ''}
       <button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>
     </header>
     ${main}
@@ -427,16 +429,14 @@ function gruppen() {
   g.push({ titel: 'Verkauf', items: [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], mitStand && ['verfuegbarkeit', I.box, l ? 'Verfügbarkeit' : 'Ausverkauft melden']].filter(Boolean) });
   g.push({ titel: 'Schichten', items: [['meineschichten', I.clock, 'Meine Schichten'], mitStand && !l && ['plan', I.cal, 'Schichtplan']].filter(Boolean) });
   if (rang() >= 2) g.push({ acc: 'standleitung', titel: 'Standleitung', ic: I.user, items: [
-    l && ['hinweise', I.bell, 'Zu bestätigen', hinweisZahl()],
     l && ['plan', I.cal, 'Personalplanung'],
-    l && ['personal', I.key, 'Codes & Freischaltung'],
-    ['einladen', I.send, 'Person einladen'],
+    ['personal', I.users, 'Personalverwaltung'],
     l && ['uebersicht', I.chart, 'Umsatz heute'],
     l && ['standbons', I.receipt, 'Bons & Storno des Stands'],
     l && ['nachtrag', I.plus, 'Nachtrag erfassen'],
     l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean) });
   if (rang() >= 3) g.push({ acc: 'marktleitung', titel: 'Marktleitung', ic: I.pin, items: [
-    ['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien & Preise'],
+    ['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'],
     ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']] });
   if (rang() >= 4) g.push({ acc: 'admin', titel: 'Admin', ic: I.gear, items: [['einstellungen', I.gear, 'Einstellungen']] });
   return g;
@@ -453,11 +453,11 @@ function drawerHtml() {
         ${ui.acc === 'stand' ? `<div class="daccbody">${standListe.map(x => `<div class="dmarkt">${esc(x.m.name)}</div>${x.st.map(s => `<button class="ditem${s.stand_id === S.stand_id ? ' aktiv' : ''}" data-stand="${esc(s.stand_id)}"><span class="ic">${leitet(s.stand_id) ? I.user : !needsCode(s.stand_id) ? I.check : ''}</span><span>${esc(s.name)}</span><small class="dzeit">${esc(naechsteZeit(s))}</small></button>`).join('')}`).join('')}</div>` : ''}
       </div>
       ${gruppen().map(g => g.acc
-        ? (g.items.length ? `<div class="dacc${ui.acc === g.acc ? ' offen' : ''}"><button class="dacchead" data-acc="${g.acc}"><span class="ic">${g.ic}</span><span>${esc(g.titel)}</span>${g.acc === 'standleitung' && hinweisZahl() && ui.acc !== g.acc ? `<span class="dbadge">${hinweisZahl()}</span>` : ''}${I.down}</button>
+        ? (g.items.length ? `<div class="dacc${ui.acc === g.acc ? ' offen' : ''}"><button class="dacchead" data-acc="${g.acc}"><span class="ic">${g.ic}</span><span>${esc(g.titel)}</span>${I.down}</button>
             ${ui.acc === g.acc ? `<div class="daccbody">${g.items.map(i => eintrag(...i)).join('')}</div>` : ''}</div>` : '')
         : (g.items.length ? `<h4>${esc(g.titel)}</h4>${g.items.map(i => eintrag(...i)).join('')}` : '')).join('')}
     <div class="dfoot">
-      ${eintrag('feedback', I.chat, 'Rückmeldung')}${eintrag('anzeige', I.eye, 'Anzeige')}${eintrag('abgleich', I.sync, 'Abgleich' + (S.queue.length ? ' · ' + S.queue.length : ''))}
+      ${eintrag('feedback', I.chat, 'Rückmeldung')}${eintrag('anzeige', I.eye, 'Anzeige')}
       <button class="ditem" data-logout><span class="ic">${I.out}</span><span>Abmelden</span></button>
       ${DEMO ? demoHtml() : ''}
       <p class="hint">Version ${APP_VERSION}</p>
