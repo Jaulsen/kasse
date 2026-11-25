@@ -54,12 +54,15 @@ P.bons = {
 
 /* ---------- Meine Schichten: eigene Schichten und Eintragen an einem Ort ---------- */
 const STATUS_TEXT = { vorgeschlagen: 'wartet auf Bestätigung', verknuepfung: 'Zuordnung offen', abgelehnt: 'abgelehnt' };
-const statusText = s => s.status === 'vorgeschlagen' && s.ersetzt ? 'Wechsel angefragt' : STATUS_TEXT[s.status];
+const statusText = s => s.status === 'vorgeschlagen' && s.ersetzt ? 'Wechsel angefragt' : s.status === 'vorgeschlagen' && s.anfrage ? 'Zugang angefragt' : STATUS_TEXT[s.status];
 const kommendeTage = st => (st && st.standzeiten || []).filter(z => z.datum >= today());
 P.schichten = {
   get form() { return !!ui.sf; },
-  titel: 'Meine Schichten',
-  open: () => { ui.sf = null; ui.sfFehler = null; },
+  open: data => {
+    ui.sfFehler = null; ui.sf = null;
+    if (data && data.anfrage && S.stand_id) ui.sf = { stand_id: S.stand_id, datum: today(), anfrage: true };
+  },
+  titel: () => ui.sf && ui.sf.anfrage ? 'Zugang anfragen' : 'Meine Schichten',
   body: () => {
     const meine = (D.schichten || []).filter(s => s.benutzer_id === S.user.benutzer_id && s.datum >= today()).sort((a, b) => (a.datum + a.von).localeCompare(b.datum + b.von));
     const liste = meine.length ? meine.map(s => {
@@ -87,20 +90,21 @@ P.schichten = {
   }
 };
 function eintragForm() {
-  const d = ui.sf, st = stand(d.stand_id), tage = kommendeTage(st);
+  const d = ui.sf, st = stand(d.stand_id);
+  const tage = d.anfrage ? [kommendeTage(st).find(z => z.datum === today()) || { datum: today(), von: '10:00', bis: '20:00' }] : kommendeTage(st);
   if (!tage.some(z => z.datum === d.datum)) d.datum = tage[0] ? tage[0].datum : today();
   const sz = tage.find(z => z.datum === d.datum) || { von: '10:00', bis: '14:00' };
   const staende = STAENDE().filter(x => kommendeTage(x).length);
   const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung');
   const belegt = (D.schichten || []).filter(s => s.stand_id === d.stand_id && s.datum === d.datum && s.status !== 'abgelehnt').sort((a, b) => a.von.localeCompare(b.von));
   return `<div class="sform card">
-    ${staende.length > 1 ? `<div class="field"><label>Stand</label><div class="chips wrap" id="sf-s">${staende.map(x => `<button class="chip" data-s="${esc(x.stand_id)}" aria-pressed="${x.stand_id === d.stand_id}">${esc(x.name)}</button>`).join('')}</div></div>` : `<b>${esc(st.name)}</b>`}
-    <div class="field"><label>Tag</label><div class="chips wrap" id="sf-t">${tage.map(z => `<button class="chip" data-t="${z.datum}" aria-pressed="${z.datum === d.datum}">${tagText(z.datum)}</button>`).join('')}</div></div>
+    ${d.anfrage ? `<b>${esc(st.name)} · heute</b><span class="muted">Trag deine Schicht ein. Nach der Bestätigung kannst du für diese Zeit kassieren.</span>` : staende.length > 1 ? `<div class="field"><label>Stand</label><div class="chips wrap" id="sf-s">${staende.map(x => `<button class="chip" data-s="${esc(x.stand_id)}" aria-pressed="${x.stand_id === d.stand_id}">${esc(x.name)}</button>`).join('')}</div></div>` : `<b>${esc(st.name)}</b>`}
+    ${d.anfrage ? '' : `<div class="field"><label>Tag</label><div class="chips wrap" id="sf-t">${tage.map(z => `<button class="chip" data-t="${z.datum}" aria-pressed="${z.datum === d.datum}">${tagText(z.datum)}</button>`).join('')}</div></div>`}
     ${zeitFeld(d, sz)}
     <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip" data-a="${esc(a)}" aria-pressed="${(d.aufgabe || aufg[0]) === a}">${esc(a)}</button>`).join('')}</div></div>
     <div class="belegt"><small>Schon eingeteilt · Stand offen ${sz.von}–${sz.bis}</small>${belegt.length ? belegt.map(s => `<span>${s.von}–${s.bis} · ${esc(s.aufgabe)} · ${esc(s.name)}</span>`).join('') : '<span>noch niemand</span>'}</div>
     ${ui.sfFehler ? `<p class="err">${esc(ui.sfFehler)}</p>` : ''}
-    <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="spe">Eintragen</button></div></div>`;
+    <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="spe">${d.anfrage ? 'Anfragen' : 'Eintragen'}</button></div></div>`;
 }
 function bindEintragForm(f) {
   const d = ui.sf;
@@ -114,14 +118,15 @@ function bindEintragForm(f) {
   f.querySelector('[data-x="abbr"]').addEventListener('click', () => { ui.sf = null; render(); });
   f.querySelector('[data-x="spe"]').addEventListener('click', () => {
     erfassen();
-    const schicht = { schicht_id: uid().replace(/-/g, '').slice(0, 10), stand_id: d.stand_id, datum: d.datum, von: d.von, bis: d.bis, aufgabe: d.aufgabe, benutzer_id: S.user.benutzer_id };
+    const schicht = { schicht_id: uid().replace(/-/g, '').slice(0, 10), stand_id: d.stand_id, datum: d.datum, von: d.von, bis: d.bis, aufgabe: d.aufgabe, benutzer_id: S.user.benutzer_id, anfrage: !!d.anfrage };
     ui.sfFehler = !d.von || !d.bis || toMin(d.bis) <= toMin(d.von) ? 'Zeiten prüfen.' : null;
     if (ui.sfFehler) return render();
     const alte = ueberschneidungen(S.user.benutzer_id, d.datum, d.von, d.bis, '');
     if (alte.length) { ui.konflikt = { schicht, alte, name: S.user.name, form: 'sf' }; return go('konflikt'); }
     aktion('schicht_speichern', { schicht });
-    ui.sf = null; render();
-    toast(leitet(d.stand_id) ? 'Eingetragen' : 'Eingetragen · wartet auf Bestätigung');
+    const anfrage = d.anfrage;
+    ui.sf = null;
+    if (anfrage) { home(); toast('Anfrage gesendet · die Standleitung bestätigt'); } else { render(); toast(leitet(d.stand_id) ? 'Eingetragen' : 'Eingetragen · wartet auf Bestätigung'); }
   });
 }
 
@@ -305,25 +310,189 @@ function bindSchichtForm(f) {
 /* ---------- Zu bestätigen ---------- */
 const HINWEIS_KNOEPFE = {
   registrierung: ['Freigeben', 'Ablehnen'], bon: ['Bestätigen', 'Stornieren'], ausverkauft: ['Bleibt aus', 'Wieder da'],
-  schicht: ['Bestätigen', 'Ablehnen'], verknuepfung: ['Zuordnen', 'Trennen'], produkt: ['Freigeben', 'Ablehnen'], rueckmeldung: ['Erledigt', 'In Arbeit']
+  schicht: ['Bestätigen', 'Ablehnen'], verknuepfung: ['Zuordnen', 'Trennen'], produkt: ['Freigeben', 'Ablehnen'], rueckmeldung: ['Erledigt', 'In Arbeit'],
+  verantwortung: ['Annehmen', 'Ablehnen'], aenderung: ['Übernehmen', 'Ablehnen'], produktaenderung: ['Übernehmen', 'Ablehnen']
 };
-const HINWEIS_TITEL = { registrierung: 'Registrierungen', schicht: 'Schichtvorschläge', verknuepfung: 'Platzhalter zuordnen', bon: 'Umsätze außerhalb der Regeln', ausverkauft: 'Ausverkauft gemeldet', produkt: 'Produktvorschläge', rueckmeldung: 'Rückmeldungen' };
+const HINWEIS_TITEL = { verantwortung: 'Verantwortung', registrierung: 'Registrierungen', schicht: 'Schichten und Zugang', verknuepfung: 'Platzhalter zuordnen', aenderung: 'Änderungsvorschläge',
+  produktaenderung: 'Produktänderungen', bon: 'Umsätze außerhalb der Regeln', ausverkauft: 'Ausverkauft gemeldet', produkt: 'Produktvorschläge', rueckmeldung: 'Rückmeldungen' };
 P.hinweise = {
   titel: 'Nachrichten',
+  open: () => { ui.fremd = false; },
+  kopf: () => fremdeHinweise().length ? `<div class="seg mini"><button data-fr="0" aria-pressed="${!ui.fremd}">Meine</button><button data-fr="1" aria-pressed="${!!ui.fremd}">Andere <span class="grauzahl">${fremdeHinweise().length}</span></button></div>` : '',
   body: () => {
-    const l = D.hinweise || [];
-    if (!l.length) return `<div class="leer-ok">${I.check}<p>Alles erledigt</p></div>`;
-    return Object.keys(HINWEIS_TITEL).filter(t => l.some(h => h.typ === t)).map(t => `<h3 class="sub">${HINWEIS_TITEL[t]}</h3>` + l.filter(h => h.typ === t).map(h => `<div class="card">
+    const l = (D.hinweise || []).filter(h => !!h.fremd === !!ui.fremd);
+    const msgs = ui.fremd ? [] : (D.nachrichten || []);
+    if (!l.length && !msgs.length) return `<div class="leer-ok">${I.check}<p>Alles erledigt</p></div>`;
+    const karte = h => `<div class="card">
       <div class="hd"><b>${esc(h.titel)}</b>${h.zeit ? `<span class="muted">${fmtTime(h.zeit)}</span>` : ''}</div>
       <span class="muted">${esc(h.text)}${h.stand ? ' · ' + esc(h.stand) : ''}</span>
-      <div class="acts"><button class="btn sm" data-h="${l.indexOf(h)}" data-a="ja">${HINWEIS_KNOEPFE[t][0]}</button><button class="btn ghost sm" data-h="${l.indexOf(h)}" data-a="nein">${HINWEIS_KNOEPFE[t][1]}</button></div></div>`).join('')).join('');
+      <div class="acts"><button class="btn sm" data-h="${D.hinweise.indexOf(h)}" data-a="ja">${HINWEIS_KNOEPFE[h.typ][0]}</button><button class="btn ghost sm" data-h="${D.hinweise.indexOf(h)}" data-a="nein">${HINWEIS_KNOEPFE[h.typ][1]}</button></div></div>`;
+    const todo = Object.keys(HINWEIS_TITEL).filter(t => l.some(h => h.typ === t)).map(t => `<h3 class="sub">${HINWEIS_TITEL[t]}</h3>` + l.filter(h => h.typ === t).map(karte).join('')).join('');
+    const neu = msgs.filter(n => !n.gelesen), alt = msgs.filter(n => n.gelesen);
+    const mk = n => `<div class="card msg${n.gelesen ? ' gelesen' : ''}"><div class="hd"><b>${esc(n.titel)}</b><span class="muted">${fmtTime(n.am)}</span></div>${n.text ? `<span>${esc(n.text)}</span>` : ''}${n.von ? `<span class="muted">${esc(n.von)}</span>` : ''}${n.gelesen ? '' : `<div class="acts"><button class="btn ghost sm" data-ok="${esc(n.id)}">OK</button></div>`}</div>`;
+    return todo + (msgs.length ? `<h3 class="sub">Mitteilungen${neu.length > 1 ? ` <button class="mini-btn" data-alle>Alle gelesen</button>` : ''}</h3>${neu.map(mk).join('')}${alt.map(mk).join('')}` : '');
   },
-  bind: root => root.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => {
-    const h = D.hinweise[+b.dataset.h]; if (!h) return;
-    aktion('hinweis_aktion', { typ: h.typ, id: h.id, aktion2: b.dataset.a });
-    render();
-  }))
+  leiste: () => rang() >= 4 ? '<button class="btn ghost wide" data-go="rundschreiben">Nachricht schreiben</button>' : '',
+  bind: root => {
+    root.querySelectorAll('[data-fr]').forEach(b => b.addEventListener('click', () => { ui.fremd = b.dataset.fr === '1'; render(); }));
+    root.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => {
+      const h = D.hinweise[+b.dataset.h]; if (!h) return;
+      aktion('hinweis_aktion', { typ: h.typ, id: h.id, aktion2: b.dataset.a });
+      render();
+    }));
+    root.querySelectorAll('[data-ok]').forEach(b => b.addEventListener('click', () => { aktion('nachricht_gelesen', { id: b.dataset.ok }); render(); }));
+    const a = root.querySelector('[data-alle]'); if (a) a.addEventListener('click', () => { aktion('nachricht_gelesen', { id: 'alle' }); render(); });
+  }
 };
+
+/* ---------- Nachricht schreiben (Admin) ---------- */
+P.rundschreiben = {
+  form: true, eltern: 'hinweise',
+  titel: 'Nachricht schreiben',
+  open: () => { ui.rs = ui.rs || { art: 'alle', wert: '' }; },
+  body: () => {
+    const r = ui.rs;
+    const wahl = r.art === 'rolle' ? Object.keys(ROLLEN).map(x => [x, x]) : r.art === 'markt' ? MAERKTE().map(m => [m.markt_id, m.name]) : r.art === 'stand' ? STAENDE().map(st => [st.stand_id, st.name + ' · ' + ((marktVon(st) || {}).name || '')]) : [];
+    if (wahl.length && !wahl.some(w => w[0] === r.wert)) r.wert = wahl[0][0];
+    return `<div class="field"><label>An</label><div class="seg" id="rs-a">${[['alle', 'Alle'], ['rolle', 'Rolle'], ['markt', 'Markt'], ['stand', 'Stand']].map(([k, t]) => `<button data-art="${k}" aria-pressed="${r.art === k}">${t}</button>`).join('')}</div></div>
+      ${wahl.length ? `<div class="field"><select id="rs-w" aria-label="Auswahl">${optionen(wahl, r.wert)}</select></div>` : ''}
+      <div class="field"><label for="rs-t">Betreff</label><input id="rs-t" value="${esc(r.titel || '')}"></div>
+      <div class="field"><label for="rs-x">Text</label><textarea id="rs-x" rows="6">${esc(r.text || '')}</textarea></div>
+      <p class="muted" style="margin:0">Markt und Stand: alle Zuständigen, Eingeplanten und Personen mit Aufgaben dort.</p>`;
+  },
+  leiste: () => '<button class="btn wide" data-send>Senden</button>',
+  bind: root => {
+    const r = ui.rs;
+    const erfassen = () => { r.titel = val(root, '#rs-t'); r.text = root.querySelector('#rs-x').value.trim(); if (root.querySelector('#rs-w')) r.wert = val(root, '#rs-w'); };
+    root.querySelectorAll('[data-art]').forEach(b => b.addEventListener('click', () => { erfassen(); r.art = b.dataset.art; render(); }));
+    const b = root.querySelector('[data-send]');
+    b.addEventListener('click', () => tue(b, async () => {
+      erfassen();
+      if (!r.titel) return toast('Betreff fehlt');
+      const x = await call({ aktion: 'nachricht_senden', titel: r.titel, text: r.text, ziel: { art: r.art, wert: r.wert } }, true);
+      if (x.ok) { ui.rs = null; toast('An ' + x.anzahl + ' Personen gesendet'); go('hinweise', { zurueck: true }); sync(); }
+    }));
+  }
+};
+
+/* ---------- Meine Aufgaben (aus Checklisten) ---------- */
+const ortName = c => c.art === 'markt' ? ((MAERKTE().find(m => m.markt_id === c.ref_id) || {}).name || '') : standName(c.ref_id);
+P.aufgaben = {
+  titel: 'Meine Aufgaben',
+  body: () => {
+    const l = ((D && D.checklisten) || []).filter(c => c.zustaendig_id === S.user.benutzer_id).sort((a, b) => (a.erledigt - b.erledigt) || (a.faellig || '9').localeCompare(b.faellig || '9'));
+    return l.length ? l.map(c => `<div class="card${c.erledigt ? ' gelesen' : ''}"><div class="hd"><b>${esc(c.text)}</b>${c.erledigt ? '<span class="pill ok">erledigt</span>' : c.faellig ? `<span class="pill ${c.faellig < today() ? 'st' : 'q'}">bis ${fmtDate(c.faellig)}</span>` : ''}</div><span class="muted">${esc(ortName(c))}</span></div>`).join('') : listeLeer('Keine Aufgaben');
+  }
+};
+
+/* ---------- Checkliste je Stand oder Markt ---------- */
+function checkZiel() { return ui.ck || { art: 'stand', ref: S.stand_id }; }
+const darfCheck = z => z.art === 'markt' ? darfMarkt(z.ref) : darfStand(z.ref);
+const zielName = z => z.art === 'markt' ? ((MAERKTE().find(m => m.markt_id === z.ref) || {}).name || '') : standName(z.ref);
+P.checkliste = {
+  get form() { return !!ui.ckForm; },
+  eltern: () => ui.ck && ui.ck.eltern,
+  titel: () => 'Checkliste · ' + zielName(checkZiel()),
+  open: data => { if (data && data.art) ui.ck = data; else if (!(data && data.zurueck)) ui.ck = { art: 'stand', ref: S.stand_id }; ui.ckForm = null; },
+  body: () => {
+    const z = checkZiel(), darf = darfCheck(z);
+    const l = ((D && D.checklisten) || []).filter(c => c.art === z.art && c.ref_id === z.ref).sort((a, b) => (a.erledigt - b.erledigt) || a.sortierung - b.sortierung);
+    const offen = l.filter(c => !c.erledigt).length;
+    const zeile = c => ui.ckForm && ui.ckForm.punkt_id === c.punkt_id ? punktForm() : `<div class="ckrow${c.erledigt ? ' done' : ''}">
+      <button class="ckbox" ${darf ? `data-haken="${esc(c.punkt_id)}"` : 'disabled'} aria-label="${c.erledigt ? 'Erledigt' : 'Offen'}: ${esc(c.text)}" aria-pressed="${c.erledigt}">${c.erledigt ? I.check : ''}</button>
+      <div class="ckt"${darf ? ` data-ced="${esc(c.punkt_id)}" role="button" tabindex="0"` : ''}><b>${esc(c.text)}</b><small>${[c.zustaendig && (c.zustaendig + (c.platzhalter ? ' (Platzhalter)' : '')), c.faellig && 'bis ' + fmtDate(c.faellig), c.erledigt && c.erledigt_von && '✓ ' + c.erledigt_von].filter(Boolean).map(esc).join(' · ')}</small></div></div>`;
+    return `${l.length ? `<div class="prog"><span style="width:${((l.length - offen) / l.length * 100).toFixed(0)}%"></span></div><p class="muted" style="margin:0">${l.length - offen} von ${l.length} erledigt</p>` : ''}
+      ${ui.ckForm && !ui.ckForm.punkt_id ? punktForm() : ''}
+      ${l.map(zeile).join('') || listeLeer('Noch keine Punkte')}
+      ${darf ? `<div class="acts" style="margin-top:6px"><select id="ck-v" aria-label="Vorlage">${optionen([['', 'Vorlage anwenden …']].concat((D.vorlagen || []).map(v => [v.vorlage_id, v.name + (v.typ === 'global' ? ' · global' : '')])), '')}</select><button class="mini-btn" data-go="vorlagen">Vorlagen</button></div>` : '<p class="muted">Ändern dürfen nur die Verantwortlichen.</p>'}`;
+  },
+  leiste: () => darfCheck(checkZiel()) && !ui.ckForm ? '<button class="btn wide" data-neu>Punkt hinzufügen</button>' : '',
+  bind: root => {
+    const z = checkZiel();
+    const n = root.querySelector('[data-neu]'); if (n) n.addEventListener('click', () => { ui.ckForm = {}; render(); });
+    root.querySelectorAll('[data-haken]').forEach(b => b.addEventListener('click', () => { const c = D.checklisten.find(x => x.punkt_id === b.dataset.haken); aktion('checkpunkt_haken', { punkt_id: c.punkt_id, erledigt: !c.erledigt }); render(); }));
+    root.querySelectorAll('[data-ced]').forEach(b => b.addEventListener('click', () => { const c = D.checklisten.find(x => x.punkt_id === b.dataset.ced); ui.ckForm = Object.assign({}, c, { platzhalter: c.platzhalter ? c.zustaendig : '' }); render(); }));
+    const v = root.querySelector('#ck-v');
+    if (v) v.addEventListener('change', () => { if (!v.value) return; const id = v.value; tue(v, async () => { const r = await call({ aktion: 'vorlage_anwenden', art: z.art, ref_id: z.ref, vorlage_id: id }, true); if (r.ok) { toast(r.anzahl + ' Punkte übernommen'); await sync(); render(); } }); });
+    const f = root.querySelector('.pform'); if (f) bindPunktForm(f, z);
+  }
+};
+function punktForm() {
+  const d = ui.ckForm, pers = (D.personen || []);
+  const modus = d.modus || (d.platzhalter ? 'p' : 'b');
+  return `<div class="card pform sform">
+    <div class="field"><input id="pk-t" value="${esc(d.text || '')}" placeholder="Was ist zu tun?" aria-label="Text"></div>
+    <div class="seg" id="pk-m"><button data-m="b" aria-pressed="${modus === 'b'}">Person</button><button data-m="p" aria-pressed="${modus === 'p'}">Platzhalter</button></div>
+    ${modus === 'b' ? `<div class="field"><select id="pk-b" aria-label="Zuständig">${optionen([['', 'niemand']].concat(pers.map(p => [p.benutzer_id, p.name])), d.zustaendig_id || '')}</select></div>`
+      : `<div class="field"><input id="pk-p" value="${esc(d.platzhalter || '')}" placeholder="Name" aria-label="Platzhalter"></div>`}
+    <div class="field"><label for="pk-f">Erledigen bis</label><input type="date" id="pk-f" value="${esc(d.faellig || '')}"></div>
+    <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button>${d.punkt_id ? '<button class="btn ghost sm danger-t" data-x="del">Löschen</button>' : ''}<button class="btn sm" style="margin-left:auto" data-x="spe">Speichern</button></div></div>`;
+}
+function bindPunktForm(f, z) {
+  const d = ui.ckForm;
+  const erfassen = () => { d.text = val(f, '#pk-t'); d.faellig = val(f, '#pk-f'); if (f.querySelector('#pk-b')) { d.zustaendig_id = val(f, '#pk-b'); d.platzhalter = ''; } if (f.querySelector('#pk-p')) { d.platzhalter = val(f, '#pk-p'); d.zustaendig_id = ''; } };
+  f.querySelectorAll('#pk-m button').forEach(b => b.addEventListener('click', () => { erfassen(); d.modus = b.dataset.m; render(); }));
+  f.querySelector('[data-x="abbr"]').addEventListener('click', () => { ui.ckForm = null; render(); });
+  const del = f.querySelector('[data-x="del"]'); if (del) del.addEventListener('click', () => { aktion('checkpunkt_loeschen', { punkt_id: d.punkt_id }); ui.ckForm = null; render(); });
+  f.querySelector('[data-x="spe"]').addEventListener('click', () => {
+    erfassen();
+    if (!d.text) return toast('Text fehlt');
+    aktion('checkpunkt_speichern', { punkt: { punkt_id: d.punkt_id || uid().replace(/-/g, '').slice(0, 10), art: z.art, ref_id: z.ref, text: d.text, zustaendig_id: d.zustaendig_id || '', platzhalter: d.platzhalter || '', faellig: d.faellig || '', sortierung: d.sortierung } });
+    ui.ckForm = null; render();
+  });
+}
+
+/* ---------- Checklisten-Vorlagen ---------- */
+P.vorlagen = {
+  get form() { return !!ui.vl; },
+  eltern: 'checkliste',
+  titel: 'Checklisten-Vorlagen',
+  open: () => { ui.vl = null; },
+  body: () => {
+    if (ui.vl) return vorlageForm();
+    const l = D.vorlagen || [];
+    const darf = v => v.eigen || (v.typ === 'global' && rang() >= 3);
+    const zeile = v => `<button class="prow" ${darf(v) ? `data-ved="${esc(v.vorlage_id)}"` : 'disabled'}><span class="pn"><b>${esc(v.name)}</b><small>${v.punkte.length} Punkte${v.basis_id ? ' · erweitert ' + esc(((l.find(x => x.vorlage_id === v.basis_id) || {}).name) || '') : ''}</small></span></button>`;
+    return `<h3 class="sub">Global</h3>${l.filter(v => v.typ === 'global').map(zeile).join('') || listeLeer('Keine')}
+      <h3 class="sub">Meine</h3>${l.filter(v => v.typ !== 'global').map(zeile).join('') || listeLeer('Keine')}`;
+  },
+  leiste: () => ui.vl ? '' : `${rang() >= 3 ? '<button class="btn ghost" data-neu="global">Neue globale</button>' : ''}<button class="btn" data-neu="individuell">Neue eigene</button>`,
+  bind: root => {
+    root.querySelectorAll('[data-neu]').forEach(b => b.addEventListener('click', () => {
+      const z = checkZiel();
+      const aktuell = ((D && D.checklisten) || []).filter(c => c.art === z.art && c.ref_id === z.ref);
+      ui.vl = { typ: b.dataset.neu, name: '', basis_id: '', punkte: aktuell.map(c => ({ text: c.text, tage: '' })) };
+      render();
+    }));
+    root.querySelectorAll('[data-ved]').forEach(b => b.addEventListener('click', () => { const v = D.vorlagen.find(x => x.vorlage_id === b.dataset.ved); ui.vl = JSON.parse(JSON.stringify(v)); render(); }));
+    const f = root.querySelector('.vform'); if (f) bindVorlageForm(f);
+  }
+};
+function vorlageForm() {
+  const v = ui.vl;
+  return `<div class="vform"><div class="field"><label for="vl-n">Name</label><input id="vl-n" value="${esc(v.name)}"></div>
+    ${v.typ !== 'global' ? `<div class="field"><label for="vl-b">Erweitert</label><select id="vl-b">${optionen([['', 'keine globale Vorlage']].concat((D.vorlagen || []).filter(x => x.typ === 'global').map(x => [x.vorlage_id, x.name])), v.basis_id)}</select></div>` : ''}
+    <h3 class="sub">Punkte · Tage vor Beginn</h3>
+    ${v.punkte.map((p, i) => `<div class="vrow"><input data-vt="${i}" value="${esc(p.text)}" aria-label="Punkt"><input data-vd="${i}" inputmode="numeric" value="${esc(p.tage)}" placeholder="–" aria-label="Tage vorher"><button class="del" data-vx="${i}" aria-label="entfernen">${I.trash}</button></div>`).join('')}
+    <button class="mini-btn" style="margin:0;align-self:flex-start" data-vadd>+ Punkt</button>
+    <div class="acts" style="margin-top:12px"><button class="btn ghost sm" data-x="abbr">Abbrechen</button>${v.vorlage_id ? '<button class="btn ghost sm danger-t" data-x="del">Löschen</button>' : ''}<button class="btn sm" style="margin-left:auto" data-x="spe">Speichern</button></div></div>`;
+}
+function bindVorlageForm(f) {
+  const v = ui.vl;
+  const erfassen = () => { v.name = val(f, '#vl-n'); if (f.querySelector('#vl-b')) v.basis_id = val(f, '#vl-b'); v.punkte = [...f.querySelectorAll('[data-vt]')].map((x, i) => ({ text: x.value.trim(), tage: f.querySelector(`[data-vd="${i}"]`).value.trim() })); };
+  f.querySelector('[data-vadd]').addEventListener('click', () => { erfassen(); v.punkte.push({ text: '', tage: '' }); render(); const l = app.querySelectorAll('[data-vt]'); if (l.length) l[l.length - 1].focus(); });
+  f.querySelectorAll('[data-vx]').forEach(b => b.addEventListener('click', () => { erfassen(); v.punkte.splice(+b.dataset.vx, 1); render(); }));
+  f.querySelector('[data-x="abbr"]').addEventListener('click', () => { ui.vl = null; render(); });
+  const del = f.querySelector('[data-x="del"]');
+  if (del) del.addEventListener('click', () => tue(del, async () => { const r = await call({ aktion: 'vorlage_loeschen', vorlage_id: v.vorlage_id }, true); if (r.ok) { ui.vl = null; await sync(); render(); } }));
+  const s = f.querySelector('[data-x="spe"]');
+  s.addEventListener('click', () => tue(s, async () => {
+    erfassen();
+    if (!v.name) return toast('Name fehlt');
+    const r = await call({ aktion: 'vorlage_speichern', vorlage: Object.assign({}, v, { punkte: v.punkte.filter(p => p.text) }) }, true);
+    if (r.ok) { ui.vl = null; toast('Gespeichert'); await sync(); render(); }
+  }));
+}
 
 /* ---------- Umsatz heute ---------- */
 P.uebersicht = {

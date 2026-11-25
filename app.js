@@ -4,7 +4,7 @@
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
 const DEMO = !API;
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
@@ -72,7 +72,15 @@ const standName = id => { const s = stand(id); return s ? s.name : ''; };
 const role = () => (S.user && S.user.rolle) || 'Helfer';
 const rang = () => ROLLEN[role()] || 1;
 const leitet = (sid = S.stand_id) => !!(sid && D && D.rechte && D.rechte.staende.includes(sid));
-const hinweisZahl = () => ((D && Array.isArray(D.hinweise)) ? D.hinweise.length : 0);
+const eigeneHinweise = () => ((D && D.hinweise) || []).filter(h => !h.fremd);
+const fremdeHinweise = () => ((D && D.hinweise) || []).filter(h => h.fremd);
+const ungelesen = () => ((D && D.nachrichten) || []).filter(n => !n.gelesen);
+const hinweisZahl = () => eigeneHinweise().length + ungelesen().length;
+const darfStand = (sid = S.stand_id) => !!(sid && D && D.rechte && (D.rechte.stand_aendern || []).includes(sid));
+const darfMarkt = mid => !!(mid && D && D.rechte && (D.rechte.markt_aendern || []).includes(mid));
+const verantwortliche = (art, ref) => ((D && D.verantwortung) || {})[art + ':' + ref] || [];
+const personName = id => { const p = ((D && D.personen) || []).find(x => x.benutzer_id === id); return p ? p.name : id === (S.user && S.user.benutzer_id) ? S.user.name : ''; };
+const meineAufgaben = () => ((D && D.checklisten) || []).filter(c => c.zustaendig_id === (S.user && S.user.benutzer_id) && !c.erledigt);
 const online = () => net.ok !== false;
 const needsCode = sid => !leitet(sid) && (S.zugang || {})[sid] !== today();
 
@@ -172,6 +180,17 @@ function lokal(en) {
     if (i >= 0) l[i] = neu; else l.push(neu);
   } else if (d.aktion === 'schicht_loeschen') {
     D.schichten = (D.schichten || []).filter(x => x.schicht_id !== d.schicht_id);
+  } else if (d.aktion === 'nachricht_gelesen') {
+    (D.nachrichten || []).forEach(n => { if (d.id === 'alle' || n.id === d.id) n.gelesen = true; });
+  } else if (d.aktion === 'checkpunkt_speichern') {
+    const p = d.punkt, l = D.checklisten || (D.checklisten = []);
+    const i = l.findIndex(x => x.punkt_id === p.punkt_id);
+    const neu = Object.assign({ erledigt: false, sortierung: (l.length + 1) * 10 }, i >= 0 ? l[i] : {}, p, { zustaendig: p.zustaendig_id ? personName(p.zustaendig_id) : p.platzhalter || '', platzhalter: !p.zustaendig_id && !!p.platzhalter });
+    if (i >= 0) l[i] = neu; else l.push(neu);
+  } else if (d.aktion === 'checkpunkt_loeschen') {
+    D.checklisten = (D.checklisten || []).filter(x => x.punkt_id !== d.punkt_id);
+  } else if (d.aktion === 'checkpunkt_haken') {
+    const c = (D.checklisten || []).find(x => x.punkt_id === d.punkt_id); if (c) { c.erledigt = d.erledigt; c.erledigt_von = S.user.name; }
   } else if (d.aktion === 'hinweis_aktion') {
     D.hinweise = (D.hinweise || []).filter(h => !(h.typ === d.typ && h.id === d.id));
     if (d.typ === 'schicht' || d.typ === 'verknuepfung') {
@@ -236,7 +255,8 @@ function applyStamm(st) {
   if (!(st.unveraendert && D)) {
     D = { einstellungen: st.einstellungen, aufgaben: st.aufgaben, kategorien: st.kategorien, produkte: st.produkte, maerkte: st.maerkte, staende: st.staende, preise: st.preise, verfuegbarkeit: st.verfuegbarkeit, hash: st.hash };
   }
-  Object.assign(D, { rechte: st.rechte, hinweise: st.hinweise || [], schichten: st.schichten || [], personen: st.personen || [] });
+  Object.assign(D, { rechte: st.rechte, hinweise: st.hinweise || [], nachrichten: st.nachrichten || [], schichten: st.schichten || [], personen: st.personen || [],
+    checklisten: st.checklisten || [], verantwortung: st.verantwortung || {}, vorlagen: st.vorlagen || [] });
   S.queue.forEach(lokal);
   lsSet(KEY_DATA, D);
   const hatte = S.stand_id && (S.zugang || {})[S.stand_id] === today();
@@ -360,7 +380,7 @@ function render() {
       <button class="where" data-ort aria-label="${esc(ortZiel()[1])}">
         <small>${esc(m ? m.name : S.user.name)}</small><span>${esc(st ? st.name : 'Stand wählen')}</span></button>
       ${chipHtml()}
-      ${rang() >= 2 ? `<button class="iconbtn bellbtn${hinweisZahl() ? ' neu' : ''}" data-go="hinweise" aria-label="${hinweisZahl() ? hinweisZahl() + ' Nachrichten' : 'Nachrichten'}">${I.bell}${hinweisZahl() ? `<span class="badge">${hinweisZahl()}</span>` : ''}</button>` : ''}
+      <button class="iconbtn bellbtn${hinweisZahl() ? ' neu' : ''}" data-go="hinweise" aria-label="${hinweisZahl() ? hinweisZahl() + ' neue Nachrichten' : 'Nachrichten'}">${I.bell}${hinweisZahl() ? `<span class="badge">${hinweisZahl()}</span>` : ''}${fremdeHinweise().length ? `<span class="badge grau">${fremdeHinweise().length}</span>` : ''}</button>
       <button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>
     </header>
     ${main}
@@ -438,9 +458,9 @@ function eintrag(name, ic, text, badge) {
 /* Seitenleiste: Bereich der eigenen Rolle oben und offen, Tieferes darunter zum Aufklappen */
 function gruppen() {
   const l = leitet(), mitStand = !!S.stand_id, r = rang();
-  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], ['schichten', I.clock, 'Meine Schichten']].filter(Boolean);
+  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], ['schichten', I.clock, 'Meine Schichten'], meineAufgaben().length && ['aufgaben', I.list, 'Meine Aufgaben', meineAufgaben().length]].filter(Boolean);
   const stl = [l && ['plan', I.cal, 'Personalplanung'], ['personal', I.users, 'Personalverwaltung'], l && ['uebersicht', I.chart, 'Umsatz heute'],
-    l && ['standbons', I.receipt, 'Bons & Storno des Stands'], l && ['nachtrag', I.plus, 'Nachtrag erfassen'], l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean);
+    l && ['standbons', I.receipt, 'Bons & Storno des Stands'], l && ['nachtrag', I.plus, 'Nachtrag erfassen'], l && ['checkliste', I.list, 'Checkliste'], l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean);
   const mkt = [['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'], ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']];
   if (r >= 4) mkt.push(['einstellungen', I.gear, 'Einstellungen']);
   if (r <= 1) return [{ titel: 'Verkauf & Schichten', items: verkauf }];
@@ -646,6 +666,7 @@ function codeAnsicht() {
     ${err || ui.codeErr ? `<p class="err">${esc(err || ui.codeErr)}</p>` : ''}
     <button class="btn wide" type="submit">Freischalten</button>
     ${meine.length ? `<p class="muted center">Deine Schicht: ${meine.slice(0, 2).map(s => (s.datum === today() ? 'heute' : fmtDate(s.datum)) + ' ' + s.von + '–' + s.bis).join(', ')}</p>` : ''}
+    <button class="btn ghost wide" type="button" data-go="anfrage">Zugang anfragen</button>
     <button class="btn ghost wide" type="button" data-go="schichten">Meine Schichten</button>
   </form></div></section>`;
   return [html, root => {
@@ -653,6 +674,7 @@ function codeAnsicht() {
     if (!ui.drawer && !ui.overlay) inp.focus();
     root.querySelector('#codeform').addEventListener('submit', e => { e.preventDefault(); tue(e.submitter || root.querySelector('#codeform [type=submit]'), () => redeem(inp.value.replace(/\D/g, ''))); });
     root.querySelector('[data-go="schichten"]').addEventListener('click', () => go('schichten'));
+    root.querySelector('[data-go="anfrage"]').addEventListener('click', () => go('schichten', { anfrage: true }));
   }];
 }
 async function redeem(code) {
@@ -835,21 +857,35 @@ OV.info = {
       : av === 'verfuegbar' ? '<button class="btn ghost wide" data-v="ausverkauft">Ausverkauft melden</button>' : '<div class="info-msg">Ausverkauft gemeldet</div>';
     return `<div class="infohead"><b class="num">${eur(preis(p))}</b><span class="muted">${esc(p.kategorie)}</span></div>
       ${verf}
+      ${p.verantwortlich ? `<p class="muted" style="margin:0">Verantwortlich: ${esc(p.verantwortlich)}</p>` : ''}
       ${pics.length ? `<div class="gallery">${pics.map(x => `<figure>${x.src ? `<button class="zoom" data-zoom="${esc(x.src)}"><img src="${x.src}" alt="${esc(x.name)}"></button>` : `<div class="ph">${ladeHtml}</div>`}</figure>`).join('')}</div>` : ''}
       ${p.beschreibung ? `<p class="desc">${esc(p.beschreibung)}</p>` : ''}
       ${(p.info || []).filter(i => i.typ === 'dok').map(d => d.url ? `<a class="doc" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="ic">PDF</span><span>${esc(d.name)}</span></a>` : `<div class="doc"><span class="ic">PDF</span><span>${esc(d.name)}</span></div>`).join('')}`;
   },
-  footer: () => `<button class="btn ghost" data-close>Schließen</button>${rang() >= 3 ? '<button class="btn blue" data-x="edit">Bearbeiten</button>' : ''}<button class="btn" style="flex:1" data-x="add" ${availOf(S.stand_id, ui.info) !== 'verfuegbar' ? 'disabled' : ''}>+ 1</button>`,
+  footer: () => `<button class="btn ghost" data-close>Schließen</button>${rang() >= 2 || (prod(ui.info) || {}).verantwortlich_id === S.user.benutzer_id ? '<button class="btn blue" data-x="edit">Bearbeiten</button>' : ''}<button class="btn" style="flex:1" data-x="add" ${availOf(S.stand_id, ui.info) !== 'verfuegbar' ? 'disabled' : ''}>+ 1</button>`,
   bind: root => {
     root.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => {
-      enqueue('Verfuegbarkeit', { stand_id: S.stand_id, produkt_id: ui.info, status: b.dataset.v, geaendert_am: new Date().toISOString() });
-      if (b.dataset.v !== 'verfuegbar') delete S.cart[ui.info];
-      render(); toast(b.dataset.v === 'verfuegbar' ? 'Wieder verfügbar' : b.dataset.v === 'ausverkauft' ? 'Als ausverkauft gemeldet' : 'Ausgeblendet');
+      if (b.getAttribute('aria-pressed') === 'true') return;
+      if (b.dataset.v === 'verfuegbar') return verfuegbarkeit('verfuegbar');
+      ui.verfNeu = b.dataset.v; go('verfFrage');
     }));
     root.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => { ui.zoom = b.dataset.zoom; go('bild'); }));
     const add = root.querySelector('[data-x="add"]'); if (add) add.addEventListener('click', () => { ui.overlay = null; change(ui.info, +1); });
     const ed = root.querySelector('[data-x="edit"]'); if (ed) ed.addEventListener('click', () => { ui.overlay = null; openProdukt(ui.info, null); });
   }
+};
+function verfuegbarkeit(status) {
+  enqueue('Verfuegbarkeit', { stand_id: S.stand_id, produkt_id: ui.info, status, geaendert_am: new Date().toISOString() });
+  if (status !== 'verfuegbar') delete S.cart[ui.info];
+  ui.overlay = 'info'; render();
+  toast(status === 'verfuegbar' ? 'Wieder verfügbar' : status === 'ausverkauft' ? 'Als ausverkauft gemeldet' : 'Ausgeblendet');
+}
+OV.verfFrage = {
+  zurueck: () => 'info',
+  titel: () => ui.verfNeu === 'nicht_da' ? 'Ausblenden?' : 'Ausverkauft melden?',
+  body: () => `<p style="margin:0;font-size:18px"><b>${esc((prod(ui.info) || {}).name)}</b> ${ui.verfNeu === 'nicht_da' ? 'an diesem Stand ausblenden?' : 'ist wirklich ausverkauft?'}</p>`,
+  footer: () => `<button class="btn ghost" data-close>Abbrechen</button><button class="btn danger" style="flex:1" data-x="ja">${ui.verfNeu === 'nicht_da' ? 'Ausblenden' : 'Ja, ausverkauft'}</button>`,
+  bind: root => root.querySelector('[data-x="ja"]').addEventListener('click', () => verfuegbarkeit(ui.verfNeu))
 };
 OV.bild = {
   screen: true, zurueck: () => 'info',
