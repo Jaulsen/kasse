@@ -282,13 +282,6 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
 @media (prefers-reduced-motion: no-preference) { .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } } }
 
   /* 2.0 */
-  #app.gross-2 .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  #app.gross-3 .grid { grid-template-columns: 1fr 1fr; }
-  #app.gross-2 .tile .nm, #app.gross-2 .tile .pr { font-size: 16px; }
-  #app.gross-3 .tile .nm, #app.gross-3 .tile .pr { font-size: 19px; }
-  #app.gross-2 .bar .sum b, #app.gross-3 .bar .sum b { font-size: 26px; }
-  #app.gross-3 .btn { font-size: 19px; }
-  #app.gross-3 .line .n b, #app.gross-3 .menu .item { font-size: 18px; }
   .top .bellbtn { position: relative; }
   .badge { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; border-radius: 999px; background: #E0A526; color: #17231A; font-size: 11px; font-weight: 800; display: grid; place-items: center; padding: 0 4px; }
   .rowhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -466,6 +459,89 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
   .addchip { display: inline-flex; gap: 4px; align-items: center; }
   .addchip input { width: 64px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; font-size: 15px; background: var(--surface); color: var(--ink); }
   .addchip .mini-btn { margin: 0; }
+
+  /* 2.5: Schrift und Kacheln getrennt */
+  #app.kachel-1 .grid { grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 8px; }
+  #app.kachel-3 .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  #app.schrift-2 .tile .nm, #app.schrift-2 .tile .pr { font-size: 16px; }
+  #app.schrift-3 .tile .nm, #app.schrift-3 .tile .pr { font-size: 19px; }
+  #app.schrift-2 :is(.phead, .pbody, .pbar, .sheet, .dbody, .dhead, .filters, .kfuss, .banner, .rgeld, .screen .start) { zoom: 1.14; }
+  #app.schrift-3 :is(.phead, .pbody, .pbar, .sheet, .dbody, .dhead, .filters, .kfuss, .banner, .rgeld, .screen .start) { zoom: 1.3; }
+  #app:is(.schrift-2, .schrift-3) .formrow { grid-template-columns: minmax(0, 1fr); }
+  #app:is(.schrift-2, .schrift-3) .zrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
+  #app:is(.schrift-2, .schrift-3) .zrow [data-zd] { grid-column: 1 / -1; }
+  #app:is(.schrift-2, .schrift-3) .zrow [data-zx] { grid-row: 1; grid-column: 3; }
+  #app:is(.schrift-2, .schrift-3) .zrow [data-zd] { grid-column: 1 / 3; }
+  #app.schrift-2 .vorschau { zoom: .877; } #app.schrift-3 .vorschau { zoom: .77; }
+  textarea.fest { resize: none; }
+  .vorschau { border: 1px dashed var(--line); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 10px; pointer-events: none; background: var(--bg); }
+  .vorschau .bar { padding: 8px 0 0; background: none; }
+  .vorschau .bar .btn { display: grid; place-items: center; }
+  /* Kasse: Rückgeld, letzter Bon */
+  .rgeld { display: block; width: 100%; margin: 0 0 10px; border: 2px solid var(--green); background: var(--green-soft); color: var(--green-dark); border-radius: 16px; padding: 8px 12px; text-align: center; animation: fade .15s ease-out; }
+  .rgeld small { display: block; font-weight: 800; font-size: 14px; }
+  .rgeld b { font-family: var(--font-display); font-size: 44px; font-weight: 600; line-height: 1.1; }
+  .rgeld.aus { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+  .lastbon { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px; background: var(--surface); border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); font-weight: 700; }
+  .lastbon .mini-btn { margin: 0; }
+  .lastbon + .bar { border-top: 0; padding-top: 4px; }
+  .banner.warn { background: #FFE08A; color: #5B3B00; }
+  .givenrow .mini-btn + .mini-btn { margin-left: 6px; }
+  /* Belegung und Abdeckung */
+  .beleg, .abdeckung { display: flex; flex-direction: column; gap: 4px; background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+  .beleg > small { color: var(--muted); font-weight: 800; font-size: 12px; }
+  .beleg .scale, .abdeckung .scale { margin-left: 74px; }
+  .brow { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 4px; align-items: center; font-size: 12.5px; }
+  .brow > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 700; }
+  .brow.mein > span { color: var(--green); }
+  .brow .track { height: 16px; background: transparent; }
+  .track .offenzeit { position: absolute; top: 0; bottom: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+  .track .luecke { position: absolute; top: 2px; bottom: 2px; background: repeating-linear-gradient(45deg, #F3C5C1 0 5px, #FBE3E1 5px 10px); border-radius: 4px; }
+  .track .blk { opacity: .85; }
+  .track .blk.vor { opacity: .4; }
+  .brow .track .blk { top: 2px; bottom: 2px; }
+  .lueckentext { margin: 2px 0 0; color: var(--danger); font-weight: 700; font-size: 13px; }
+  .chip.egal { border-style: dashed; }
+  .schicht .chev { color: var(--muted); display: grid; place-items: center; }
+  .schicht .chev svg { width: 18px; height: 18px; }
+  .schicht[data-sedit] { cursor: pointer; }
+  /* Heute am Stand */
+  .hzeile { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .hzeile b { flex: 1; min-width: 0; font-size: 15px; }
+  .hzeile span { color: var(--muted); font-size: 13.5px; }
+  .hzeile .mini-btn { margin: 0; }
+  .hkarte { display: flex; align-items: center; gap: 10px; border: 2px solid var(--danger); background: var(--danger-soft); color: var(--danger); border-radius: 14px; padding: 10px 14px; font-weight: 800; text-align: left; }
+  .hkarte b { font-family: var(--font-display); font-size: 26px; }
+  .hkarte span { flex: 1; }
+  .hkarte svg { width: 20px; height: 20px; transform: rotate(180deg); }
+  /* Ampel */
+  .ampel { display: flex; gap: 5px; flex-wrap: wrap; }
+  .apill { font-size: 12px; font-weight: 800; border-radius: 999px; padding: 2px 8px; }
+  .apill.gr { background: var(--green-soft); color: var(--green-dark); }
+  .apill.ge { background: var(--amber-soft); color: var(--amber); }
+  .apill.ro { background: var(--danger-soft); color: var(--danger); }
+  .adot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--line); }
+  .adot.gr { background: var(--green); } .adot.ge { background: #E0A526; } .adot.ro { background: var(--danger); }
+  /* Seitenleiste */
+  .dnicht { margin: 4px 6px 6px; padding: 8px 10px; border-radius: 10px; background: var(--amber-soft); color: var(--amber); font-weight: 800; font-size: 13.5px; }
+  .gwahl { display: flex; flex-direction: column; gap: 10px; }
+  .install { display: flex; gap: 14px; align-items: center; }
+  .install img { width: 56px; height: 56px; border-radius: 14px; }
+  .install ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 17px; }
+  .install svg { width: 18px; height: 18px; vertical-align: -3px; }
+  .rmfoto { max-width: 100%; max-height: 240px; border-radius: 10px; display: block; }
+  .ok-t { color: var(--green); font-weight: 800; }
+  .vblock { display: flex; flex-direction: column; gap: 10px; }
+  .gtag.ohne { background: var(--amber-soft); color: var(--amber); }
+  .gtag { display: inline-block; font-size: 11.5px; font-weight: 800; border-radius: 6px; padding: 1px 6px; background: var(--blue-soft); color: var(--blue); vertical-align: 2px; }
+  /* Tablet: Menü links fest */
+  #app.dock { max-width: 1280px; padding-left: 288px; }
+  #app.dock .drawer.docked { position: absolute; left: 0; top: 0; bottom: 0; width: 288px; border-radius: 0; box-shadow: none; border-right: 1px solid var(--line); z-index: 5; }
+  #app.dock .grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  #app.dock.kachel-1 .grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+  #app.dock.kachel-3 .grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  #app.dock .sheet { max-width: 640px; margin: 0 auto; border-radius: 20px 20px 0 0; }
+  #app.dock .scrim { justify-content: center; }
 </style>
 </head>
 <body>

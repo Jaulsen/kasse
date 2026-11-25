@@ -1,10 +1,11 @@
-/* Weihnachtsmarkt-Kasse · App 2.1 · Kern: Zustand, Abgleich, Rahmen, Seitenleiste, Kasse */
+/* Weihnachtsmarkt-Kasse · App 2.5 · Kern: Zustand, Abgleich, Rahmen, Seitenleiste, Kasse */
 'use strict';
 
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
 const DEMO = !API;
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.5';
+const GRUPPE = 'Stamm', GRUPPEN = 'Stämme';
 const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
@@ -15,8 +16,10 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&
 const fmtTime = iso => new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const fmtClock = iso => new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 const fmtDate = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' }) : '';
-const today = () => new Date().toLocaleDateString('sv-SE');
-const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+/* Uhrzeit: weicht die Uhr des Handys von Google ab, gilt die Zeit von Google */
+const jetzt = () => new Date(Date.now() + (Math.abs((S && S.uhr) || 0) > 120000 ? S.uhr : 0));
+const today = () => jetzt().toLocaleDateString('sv-SE');
+const nowMin = () => { const d = jetzt(); return d.getHours() * 60 + d.getMinutes(); };
 const toMin = hm => { const p = String(hm || '').split(':'); return Number(p[0]) * 60 + Number(p[1] || 0); };
 const fmtCode = c => String(c).slice(0, 3) + ' ' + String(c).slice(3);
 const initials = n => n.replace(/\(.*?\)/g, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
@@ -40,8 +43,9 @@ const IDB = (() => {
 const IMG = {};
 
 /* ---------- Zustand ---------- */
-const defaultState = () => ({ user: null, geraet_id: uid(), stand_id: null, bons: [], queue: [], fehlerlog: [], cart: {}, nachtrag: null, zugang: {}, letzterAbgleich: null, letzterFehler: null, anzeige: 1 });
+const defaultState = () => ({ user: null, geraet_id: uid(), stand_id: null, bons: [], queue: [], fehlerlog: [], cart: {}, nachtrag: null, zugang: {}, letzterAbgleich: null, letzterFehler: null, schrift: 1, kachel: 2, uhr: 0, installGezeigt: false, autoStand: null });
 let S = Object.assign(defaultState(), lsGet(KEY_STATE) || {});
+if (S.anzeige && !S.schriftAlt) { S.schrift = S.anzeige; S.kachel = S.anzeige === 3 ? 3 : 2; S.schriftAlt = true; delete S.anzeige; }
 (function uebernehmen() {   // Warteschlange aus Version 1.x weiter übertragen
   const alt = lsGet('wmk-v1');
   if (!alt || lsGet(KEY_STATE)) return;
@@ -57,9 +61,9 @@ const OV = {};   // Fenster über der Kasse (Warenkorb, Bezahlen, Info): { titel
 const P = {};    // Seiten: { titel, eltern, body, leiste, bind, open, form }
 
 function save() { S.bons = S.bons.slice(-300); S.fehlerlog = (S.fehlerlog || []).slice(-30); lsSet(KEY_STATE, S); }
-function keepDevice() { return { geraet_id: S.geraet_id, queue: S.queue, fehlerlog: S.fehlerlog, letzterAbgleich: S.letzterAbgleich, anzeige: S.anzeige }; }
+function keepDevice() { return { geraet_id: S.geraet_id, queue: S.queue, fehlerlog: S.fehlerlog, letzterAbgleich: S.letzterAbgleich, schrift: S.schrift, kachel: S.kachel, schriftAlt: true, uhr: S.uhr, installGezeigt: S.installGezeigt }; }
 
-const E = () => (D && D.einstellungen) || { schnellbetraege: [1, 2, 5, 10, 20, 50], storno_anzahl: 2, abgleich_sekunden: 60, app_titel: 'Weihnachtsmarkt-Kasse', puffer_min: 30 };
+const E = () => (D && D.einstellungen) || { schnellbetraege: [0.5, 1, 2, 5, 10, 20, 50], storno_anzahl: 2, abgleich_sekunden: 60, app_titel: 'Weihnachtsmarkt-Kasse', puffer_min: 30 };
 const KATS = () => (D && D.kategorien) || [];
 const PRODS = () => (D && D.produkte) || [];
 const STAENDE = () => (D && D.staende) || [];
@@ -82,7 +86,14 @@ const verantwortliche = (art, ref) => ((D && D.verantwortung) || {})[art + ':' +
 const personName = id => { const p = ((D && D.personen) || []).find(x => x.benutzer_id === id); return p ? p.name : id === (S.user && S.user.benutzer_id) ? S.user.name : ''; };
 const meineAufgaben = () => ((D && D.checklisten) || []).filter(c => c.zustaendig_id === (S.user && S.user.benutzer_id) && !c.erledigt);
 const online = () => net.ok !== false;
-const needsCode = sid => !leitet(sid) && (S.zugang || {})[sid] !== today();
+const GRUPPEN_L = () => (D && D.gruppen) || [];
+const gruppeName = id => (GRUPPEN_L().find(g => g.gruppe_id === id) || {}).name || '';
+/* Zugang über die eigene Schicht: rechnet die App selbst, damit es auch ohne Netz geht */
+function schichtJetzt(sid) {
+  const pf = E().puffer_min || 30, t = today(), m = nowMin(), ich = S.user && S.user.benutzer_id;
+  return ((D && D.schichten) || []).find(s => s.benutzer_id === ich && s.status === 'geplant' && s.datum === t && (!sid || s.stand_id === sid) && m >= toMin(s.von) - pf && m <= toMin(s.bis) + pf);
+}
+const needsCode = sid => !leitet(sid) && (S.zugang || {})[sid] !== today() && !schichtJetzt(sid);
 
 function preis(p, st = stand()) {
   if (!p) return 0;
@@ -118,13 +129,22 @@ const imgUrl = (ordner, name) => { const x = IMG[ordner + ':' + name]; return x 
 
 
 /* ---------- Schnittstelle ---------- */
+function uhrPruefen(r, t0) {
+  if (!r || !r.zeit) return;
+  const t1 = Date.now(), server = new Date(r.zeit).getTime();
+  if (isNaN(server) || t1 - t0 > 8000) return;
+  S.uhr = Math.round(server - (t0 + t1) / 2);
+}
 async function api(params, post) {
   const p = Object.assign({ benutzer_id: S.user ? S.user.benutzer_id : '', geraet_id: S.geraet_id }, params);
+  const t0 = Date.now();
   if (DEMO) {
     await new Promise(r => setTimeout(r, window.DEMO_LATENZ || 150));
     if (window.DEMO_NETZ === false) { net.ok = false; throw new TypeError('offline'); }
     net.ok = true;
-    return window.DEMO_SERVER.call(p, post);
+    const r = window.DEMO_SERVER.call(p, post);
+    uhrPruefen(r, t0);
+    return r;
   }
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), post ? 45000 : 25000);
@@ -137,6 +157,7 @@ async function api(params, post) {
     let j;
     try { j = JSON.parse(text); } catch (e) { throw new Error('Antwort der Schnittstelle unlesbar'); }
     net.ok = true;
+    uhrPruefen(j, t0);
     return j;
   } catch (e) {
     if (e.name === 'AbortError' || e instanceof TypeError || /HTTP/.test(e.message)) net.ok = false;
@@ -209,12 +230,13 @@ async function sync() {
   const angemeldet = S.user && S.user.status === 'aktiv';
   net.syncing = true; paintChip();
   if (S.user && !D) render();
-  let changed = false;
+  let changed = false, vNachSync = null;
   try {
     while (S.queue.length) {
-      const batch = S.queue.slice(0, 40);
+      const batch = S.queue.slice(0, batch1(S.queue));
       const r = await api({ aktion: 'sync', eintraege: batch }, true);
       if (!r.ok) throw new Error(r.fehler || 'Abgleich abgelehnt');
+      vNachSync = r.v || null;
       const done = new Set(r.erledigt || []);
       (r.fehler || []).forEach(f => {
         done.add(f.id); changed = true;
@@ -227,7 +249,10 @@ async function sync() {
     }
     if (!S.user) return;
     if (S.queue.length) throw new Error('Übertragung unvollständig');
-    const st = await api({ aktion: 'stammdaten', hash: angemeldet && D ? D.hash || '' : '' });
+    // Nur Bons übertragen und nichts Neues: Stammdaten nicht erneut holen
+    if (vNachSync && D && D.v === vNachSync && angemeldet && Date.now() - (net.stammZeit || 0) < 300000) { S.letzterAbgleich = new Date().toISOString(); S.letzterFehler = null; save(); return; }
+    const st = await api({ aktion: 'stammdaten', hash: angemeldet && D ? D.hash || '' : '', v: angemeldet && D ? D.v || '' : '' });
+    net.stammZeit = Date.now();
     const vorher = JSON.stringify([D, S.user, S.zugang]);
     applyStamm(st);
     changed = changed || vorher !== JSON.stringify([D, S.user, S.zugang]);
@@ -250,20 +275,33 @@ function applyStamm(st) {
     return;
   }
   if (!st.version || !/^2\.[1-9]/.test(String(st.version))) throw new Error('Schnittstelle ist noch Version ' + (st.version || '1.x'));
-  if (st.benutzer) Object.assign(S.user, { rolle: st.benutzer.rolle, status: st.benutzer.status, name: st.benutzer.name });
+  if (st.benutzer) Object.assign(S.user, { rolle: st.benutzer.rolle, status: st.benutzer.status, name: st.benutzer.name, gruppe_id: st.benutzer.gruppe_id || '' });
   if (!st.benutzer || st.benutzer.status !== 'aktiv') return;
+  if (st.gleich && D) { D.v = st.v; autoStand(); return; }   // nichts geändert
   if (!(st.unveraendert && D)) {
-    D = { einstellungen: st.einstellungen, aufgaben: st.aufgaben, kategorien: st.kategorien, produkte: st.produkte, maerkte: st.maerkte, staende: st.staende, preise: st.preise, verfuegbarkeit: st.verfuegbarkeit, hash: st.hash };
+    D = { einstellungen: st.einstellungen, aufgaben: st.aufgaben, kategorien: st.kategorien, produkte: st.produkte, maerkte: st.maerkte, staende: st.staende, preise: st.preise, verfuegbarkeit: st.verfuegbarkeit, gruppen: st.gruppen || [], hash: st.hash };
   }
-  Object.assign(D, { rechte: st.rechte, hinweise: st.hinweise || [], nachrichten: st.nachrichten || [], schichten: st.schichten || [], personen: st.personen || [],
+  Object.assign(D, { v: st.v || '', rechte: st.rechte, hinweise: st.hinweise || [], nachrichten: st.nachrichten || [], schichten: st.schichten || [], personen: st.personen || [],
     checklisten: st.checklisten || [], verantwortung: st.verantwortung || {}, vorlagen: st.vorlagen || [] });
   S.queue.forEach(lokal);
   lsSet(KEY_DATA, D);
-  const hatte = S.stand_id && (S.zugang || {})[S.stand_id] === today();
+  const hatte = S.stand_id && !needsCode(S.stand_id);
   S.zugang = st.zugang || {};
   if (hatte && needsCode(S.stand_id)) ui.msg = 'Freischaltung beendet.';
   if (S.stand_id && !stand()) S.stand_id = null;
+  autoStand();
 }
+/* Wer gerade eine Schicht hat, landet am Stand dieser Schicht */
+function autoStand() {
+  const s = schichtJetzt();
+  if (!s || S.autoStand === s.schicht_id || !stand(s.stand_id)) return;
+  S.autoStand = s.schicht_id;
+  if (S.stand_id === s.stand_id || cartCount() || S.nachtrag || ui.page || ui.overlay) return;
+  S.stand_id = s.stand_id; S.cart = {}; ui.kat = 'Alle'; ui.q = '';
+  setTimeout(() => toast('Deine Schicht: ' + esc(s.aufgabe) + ' · ' + esc(standName(s.stand_id))), 50);
+}
+/* Fotos machen Einträge groß: dann weniger je Übertragung */
+function batch1(q) { let n = 0, g = 0; for (const e of q) { g += e.data && e.data.bild ? e.data.bild.length : 300; n++; if (n >= 40 || g > 2500000) break; } return Math.max(1, n); }
 
 async function loadImages() {
   if (DEMO || !D || loadImages.running) return;
@@ -353,17 +391,21 @@ function softRender(changed) {
   render();
 }
 
+const dock = () => window.innerWidth >= 900;
 function render() {
   save();
-  app.className = 'gross-' + (S.anzeige || 1);
+  const gedockt = !!(S.user && D && S.user.status === 'aktiv' && dock());
+  app.className = 'schrift-' + (S.schrift || 1) + ' kachel-' + (S.kachel || 2) + (gedockt ? ' dock' : '');
   const t = einladungToken();
   if (t && !S.user) return renderRegistrierung(t);
   if (!S.user) return renderStart();
   if (S.user.status === 'wartet') return renderWartet();
   if (S.user.status === 'gesperrt') return renderInfo('Zugang gesperrt');
   if (!D) return renderErsteDaten();
+  if (GRUPPEN_L().length && !S.user.gruppe_id && !(rang() >= 4 && ['einstellungen', 'personen', 'struktur', 'marktedit'].includes(ui.page))) return renderGruppeWaehlen();
   if (S.stand_id && !stand()) S.stand_id = null;
   if (ui.page && (!P[ui.page] || (P[ui.page].stand && !S.stand_id))) ui.page = null;
+  if (gedockt) ui.drawer = false;
 
   const keep = sel => { const el = app.querySelector(sel); return el ? [el.scrollTop, el.scrollLeft] : null; };
   const pos = { gw: keep('#gw'), chips: keep('.filters .chips'), pb: keep('#pb'), page: render.page, dr: keep('.drawer .dbody'), sb: keep('.sheet .body'), ov: render.ov };
@@ -375,36 +417,50 @@ function render() {
   else { [main, bindMain] = kasse(); }
 
   const st = stand(), m = marktVon(st);
+  const abw = Math.abs(S.uhr || 0) > 300000 ? Math.round(Math.abs(S.uhr) / 60000) : 0;
   app.innerHTML = `<header class="top">
       <button class="logo" data-home aria-label="Zur Kasse"><img src="icon-192.png" alt=""></button>
       <button class="where" data-ort aria-label="${esc(ortZiel()[1])}">
         <small>${esc(m ? m.name : S.user.name)}</small><span>${esc(st ? st.name : 'Stand wählen')}</span></button>
       ${chipHtml()}
       <button class="iconbtn bellbtn${hinweisZahl() ? ' neu' : ''}" data-go="hinweise" aria-label="${hinweisZahl() ? hinweisZahl() + ' neue Nachrichten' : 'Nachrichten'}">${I.bell}${hinweisZahl() ? `<span class="badge">${hinweisZahl()}</span>` : ''}${fremdeHinweise().length ? `<span class="badge grau">${fremdeHinweise().length}</span>` : ''}</button>
-      <button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>
+      ${gedockt ? '' : `<button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>`}
     </header>
+    ${abw ? `<div class="banner warn">Uhrzeit am Handy weicht ${abw} Min. ab</div>` : ''}
     ${main}
-    ${ui.drawer ? drawerHtml() : ''}`;
+    ${ui.drawer || gedockt ? drawerHtml(gedockt) : ''}`;
   if (!ui.drawer) ui.drawerShown = false;
   bindMain(app);
-  app.querySelector('[data-home]').addEventListener('click', home);
-  app.querySelector('[data-ort]').addEventListener('click', () => { const z = ortZiel()[0]; z ? go(z) : home(); });
-  app.querySelector('[data-burger]').addEventListener('click', () => { ui.drawer = !ui.drawer; if (ui.drawer && !ui.acc) ui.acc = accFuer(ui.page); render(); });
-  app.querySelectorAll('.top [data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
-  if (ui.drawer) bindDrawer();
+  app.querySelector('[data-home]').addEventListener('click', () => verlassen(home));
+  app.querySelector('[data-ort]').addEventListener('click', () => { const z = ortZiel()[0]; verlassen(() => z ? go(z) : home()); });
+  const bu = app.querySelector('[data-burger]');
+  if (bu) bu.addEventListener('click', () => { ui.drawer = !ui.drawer; if (ui.drawer && !ui.acc) ui.acc = accFuer(ui.page); drawerUmschalten(); });
+  app.querySelectorAll('.top [data-go]').forEach(b => b.addEventListener('click', () => verlassen(() => go(b.dataset.go))));
+  if (ui.drawer || gedockt) bindDrawer(gedockt);
   renderSheet();
   const restore = (sel, v) => { const el = app.querySelector(sel); if (el && v) { el.scrollTop = v[0]; el.scrollLeft = v[1]; } };
   restore('#gw', pos.gw); restore('.filters .chips', pos.chips); restore('.drawer .dbody', pos.dr);
   if (pos.page === ui.page) restore('#pb', pos.pb);
   if (pos.ov === ui.overlay) restore('.sheet .body', pos.sb);
   render.page = ui.page; render.ov = ui.overlay;
+  nachSpeichernPruefen();
+  if (!S.installGezeigt && installMoeglich() && !ui.overlay && !ui.page) setTimeout(installHinweis, 800);
+}
+/* Menü auf- und zuklappen, ohne die Seite neu aufzubauen (Eingaben bleiben erhalten) */
+function drawerUmschalten() {
+  const alt = app.querySelector('[data-dscrim]'); if (alt) alt.remove();
+  const bu = app.querySelector('[data-burger]');
+  if (bu) { bu.classList.toggle('auf', ui.drawer); bu.innerHTML = ui.drawer ? I.x : I.menu; bu.setAttribute('aria-expanded', ui.drawer); bu.setAttribute('aria-label', ui.drawer ? 'Menü schließen' : 'Menü'); }
+  if (!ui.drawer) { ui.drawerShown = false; return; }
+  app.insertAdjacentHTML('beforeend', drawerHtml(false));
+  bindDrawer(false);
 }
 
 /* Tipp auf Markt/Stand oben: führt je nach Rolle an die passende Stelle */
 function ortZiel() {
   if (!S.stand_id) return [null, 'Stand wählen'];
+  if (leitet()) return ['heute', 'Heute am Stand'];
   if (rang() >= 3) return ['struktur', 'Märkte & Stände'];
-  if (leitet()) return ['standedit', 'Stand einrichten'];
   return ['schichten', 'Meine Schichten'];
 }
 
@@ -421,13 +477,71 @@ function seite(name) {
     </section>`;
   return [html, root => {
     const s = root.querySelector('.page');
-    const b = s.querySelector('[data-back]'); if (b) b.addEventListener('click', () => go(eltern, { zurueck: true }));
-    s.querySelectorAll('[data-go]').forEach(x => x.addEventListener('click', () => go(x.dataset.go)));
+    const b = s.querySelector('[data-back]'); if (b) b.addEventListener('click', () => verlassen(() => go(eltern, { zurueck: true })));
+    s.querySelectorAll('[data-go]').forEach(x => x.addEventListener('click', () => verlassen(() => go(x.dataset.go))));
+    aenderungMerken(s, name);
     if (p.bind) p.bind(s);
   }];
 }
 
+/* ---------- Ungespeicherte Änderungen: beim Verlassen nachfragen ---------- */
+const SICHERN = '[data-spe], [data-x="spe"], [data-send]';
+const KEINE_AENDERUNG = '[data-go], [data-back], [data-x="abbr"], [data-nav], [data-zoom], [data-x="del"], [data-del], [data-delfrage], [data-nein]';
+function aenderungMerken(s, name) {
+  if (ui.dirtyPage !== name) { ui.dirty = false; ui.dirtyPage = name; }
+  const merke = e => {
+    if (e.isTrusted === false) return;
+    const t = e.target;
+    if (t.closest && t.closest('[data-sofort]')) return;   // wirkt sofort, kein Speichern nötig
+    if (e.type === 'click') {
+      const b = t.closest('button, [role="button"], label'); if (!b || !b.closest('.pbody')) return;
+      if (b.matches('[data-x="abbr"]')) { ui.dirty = false; return; }
+      if (b.matches(SICHERN)) { ui.speichert = Date.now(); return; }
+      if (b.matches(KEINE_AENDERUNG)) return;
+    }
+    ui.dirty = true; ui.speichert = 0;
+  };
+  s.addEventListener('input', merke, true);
+  s.addEventListener('change', merke, true);
+  s.addEventListener('click', merke, true);
+  const sb = s.querySelector('.pbar'); if (sb) sb.addEventListener('click', e => { if (e.target.closest(SICHERN)) ui.speichert = Date.now(); }, true);
+}
+const formAktiv = () => { const p = ui.page && P[ui.page]; return !!(p && p.form && app.querySelector('.page ' + SICHERN.split(', ').join(', .page '))); };
+const ungespeichert = () => !!(ui.dirty && ui.dirtyPage === ui.page && formAktiv() && !(ui.speichert && Date.now() - ui.speichert < 30000));
+function verlassen(fn) {
+  if (!ungespeichert()) return fn();
+  ui.ziel = fn;
+  const alt = app.querySelector('[data-ungesp]'); if (alt) alt.remove();
+  if (ui.drawer && !dock()) { ui.drawer = false; drawerUmschalten(); }
+  app.insertAdjacentHTML('beforeend', `<div class="scrim" data-ungesp><section class="sheet anim" role="dialog" aria-modal="true" aria-label="Änderungen speichern?">
+    <header><h2>Änderungen speichern?</h2><button class="close" data-u="zu" aria-label="Schließen">×</button></header>
+    <footer><button class="btn ghost" data-u="weg">Verwerfen</button><button class="btn" style="flex:1" data-u="ja">Speichern</button></footer></section></div>`);
+  const r = app.querySelector('[data-ungesp]');
+  const zu = () => r.remove();
+  r.addEventListener('click', e => { if (e.target === r) zu(); });
+  r.querySelector('[data-u="zu"]').addEventListener('click', zu);
+  r.querySelector('[data-u="weg"]').addEventListener('click', () => { zu(); ui.dirty = false; const p = P[ui.page]; if (p && p.verwerfen) p.verwerfen(); const f = ui.ziel; ui.ziel = null; f(); });
+  r.querySelector('[data-u="ja"]').addEventListener('click', () => {
+    zu();
+    const b = app.querySelector('.page ' + SICHERN.split(', ').join(', .page '));
+    if (!b) return;
+    ui.nachSpeichern = { fn: ui.ziel, t: Date.now(), seite: ui.page }; ui.ziel = null;
+    b.click();
+  });
+}
+/* Nach „Speichern“ im Rückfragefenster: weiter zum eigentlichen Ziel, sobald gespeichert ist */
+function nachSpeichernPruefen() {
+  const n = ui.nachSpeichern;
+  if (!n) return;
+  if (Date.now() - n.t > 20000) { ui.nachSpeichern = null; return; }
+  if (ui.page === n.seite && formAktiv() && ui.dirty) return;
+  ui.nachSpeichern = null; ui.dirty = false;
+  setTimeout(n.fn, 0);
+}
+function gespeichert() { ui.dirty = false; nachSpeichernPruefen(); }
+
 function go(name, data) {
+  if (ui.nachSpeichern && ui.page === ui.nachSpeichern.seite && !OV[name]) { const f = ui.nachSpeichern.fn; ui.nachSpeichern = null; ui.dirty = false; return f(); }
   ui.drawer = false; ui.confirm = null;
   if (OV[name]) { if (OV[name].open) OV[name].open(data); ui.overlay = name; return render(); }
   if (!P[name]) return;
@@ -435,12 +549,19 @@ function go(name, data) {
   ui.overlay = null;
   const vorher = ui.page;
   ui.page = name;
-  if (P[name].open) P[name].open(data);
+  if (vorher !== name) { ui.dirty = false; ui.dirtyPage = name; }
+  const r = P[name].open ? P[name].open(data) : null;
+  if (typeof r === 'string' && P[r] && r !== name) return go(r, data);
   if (vorher !== name) { try { history.pushState({ page: name }, ''); } catch (e) {} }
   render();
   const pb = app.querySelector('#pb'); if (pb && vorher !== name) pb.scrollTop = 0;
 }
-function home() { ui.drawer = false; ui.overlay = null; ui.confirm = null; if (ui.page) { ui.page = null; try { history.pushState({ page: null }, ''); } catch (e) {} } render(); }
+function home() {
+  if (ui.nachSpeichern && ui.page === ui.nachSpeichern.seite) { const f = ui.nachSpeichern.fn; ui.nachSpeichern = null; ui.dirty = false; return f(); }
+  ui.drawer = false; ui.overlay = null; ui.confirm = null; ui.dirty = false;
+  if (ui.page) { ui.page = null; try { history.pushState({ page: null }, ''); } catch (e) {} }
+  render();
+}
 
 let toastTimer = null;
 function toast(msg) {
@@ -459,50 +580,73 @@ function eintrag(name, ic, text, badge) {
 function gruppen() {
   const l = leitet(), mitStand = !!S.stand_id, r = rang();
   const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], ['schichten', I.clock, 'Meine Schichten'], meineAufgaben().length && ['aufgaben', I.list, 'Meine Aufgaben', meineAufgaben().length]].filter(Boolean);
-  const stl = [l && ['plan', I.cal, 'Personalplanung'], ['personal', I.users, 'Personalverwaltung'], l && ['uebersicht', I.chart, 'Umsatz heute'],
-    l && ['standbons', I.receipt, 'Bons & Storno des Stands'], l && ['nachtrag', I.plus, 'Nachtrag erfassen'], l && ['checkliste', I.list, 'Checkliste'], l && ['standedit', I.edit, 'Stand einrichten']].filter(Boolean);
+  const eigene = STAENDE().filter(x => leitet(x.stand_id) && x.stand_id !== S.stand_id);
+  // Nicht für den gewählten Stand eingeteilt: Hinweis und die eigenen Stände zum Wechseln
+  const stl = l ? [['heute', I.clock, 'Heute am Stand'], ['plan', I.cal, 'Personalplanung'], ['personal', I.users, 'Personalverwaltung'], r >= 3 && ['uebersicht', I.chart, 'Umsatz heute'],
+    ['standbons', I.receipt, 'Bons & Storno des Stands'], ['nachtrag', I.plus, 'Nachtrag erfassen'], ['checkliste', I.list, 'Checkliste'], ['standedit', I.edit, 'Stand einrichten']].filter(Boolean)
+    : [['~nicht', '', S.stand_id ? 'Nicht eingeteilt für ' + standName() : 'Keinem Stand zugeordnet']].concat(eigene.slice(0, 6).map(x => ['~stand:' + x.stand_id, I.pin, x.name]));
   const mkt = [['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'], ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']];
   if (r >= 4) mkt.push(['einstellungen', I.gear, 'Einstellungen']);
   if (r <= 1) return [{ titel: 'Verkauf & Schichten', items: verkauf }];
-  if (r === 2) return [{ titel: 'Standleitung · ' + (standName() || 'kein Stand'), items: stl }, { acc: 'verkauf', titel: 'Verkauf & Schichten', ic: I.cart, items: verkauf }];
+  if (r === 2) return [{ titel: 'Standleitung' + (l ? ' · ' + standName() : ''), items: stl }, { acc: 'verkauf', titel: 'Verkauf & Schichten', ic: I.cart, items: verkauf }];
   return [{ titel: r >= 4 ? 'Admin & Marktleitung' : 'Marktleitung', items: mkt }, { acc: 'standleitung', titel: 'Standleitung', ic: I.user, items: stl }, { acc: 'verkauf', titel: 'Verkauf & Schichten', ic: I.cart, items: verkauf }];
 }
+function eintragX(i) {
+  if (i[0] === '~nicht') return `<div class="dnicht">${esc(i[2])}</div>`;
+  if (i[0].startsWith('~stand:')) return `<button class="ditem" data-stand="${esc(i[0].slice(7))}"><span class="ic">${i[1]}</span><span>${esc(i[2])}</span></button>`;
+  return eintrag(...i);
+}
 function accFuer(page) { if (!page) return null; const g = gruppen().find(x => x.acc && x.items.some(i => i[0] === page)); return g ? g.acc : null; }
-function drawerHtml() {
-  const st = stand();
+function standListeHtml() {
+  const mehrere = GRUPPEN_L().length > 1 && rang() >= 4;
   const standListe = MAERKTE().map(m => ({ m, st: STAENDE().filter(s => s.markt_id === m.markt_id) })).filter(x => x.st.length);
-  const anim = !ui.drawerShown; ui.drawerShown = true;
-  return `<div class="dscrim${anim ? ' anim' : ''}" data-dscrim><nav class="drawer" aria-label="Menü">
-    <div class="dhead"><b>${esc(S.user.name)}</b><small>${esc(role())}</small></div>
+  return standListe.map(x => `<div class="dmarkt">${esc((mehrere && gruppeName(x.m.gruppe_id) ? gruppeName(x.m.gruppe_id) + ' · ' : '') + x.m.name)}</div>${x.st.map(s => `<button class="ditem${s.stand_id === S.stand_id ? ' aktiv' : ''}" data-stand="${esc(s.stand_id)}"><span class="ic">${leitet(s.stand_id) ? I.user : !needsCode(s.stand_id) ? I.check : ''}</span><span>${esc(s.name)}</span><small class="dzeit">${esc(naechsteZeit(s))}</small></button>`).join('')}`).join('');
+}
+function drawerInhalt() {
+  const st = stand();
+  return `<div class="dhead"><b>${esc(S.user.name)}</b><small>${esc(role())}${S.user.gruppe_id && gruppeName(S.user.gruppe_id) ? ' · ' + esc(gruppeName(S.user.gruppe_id)) : ''}</small></div>
     <div class="dbody">
       <div class="dacc${ui.acc === 'stand' ? ' offen' : ''}">
         <button class="dacchead stand" data-acc="stand"><span class="ic">${I.pin}</span><span><small>Stand</small>${esc(st ? st.name : 'wählen')}</span>${I.down}</button>
-        ${ui.acc === 'stand' ? `<div class="daccbody">${standListe.map(x => `<div class="dmarkt">${esc(x.m.name)}</div>${x.st.map(s => `<button class="ditem${s.stand_id === S.stand_id ? ' aktiv' : ''}" data-stand="${esc(s.stand_id)}"><span class="ic">${leitet(s.stand_id) ? I.user : !needsCode(s.stand_id) ? I.check : ''}</span><span>${esc(s.name)}</span><small class="dzeit">${esc(naechsteZeit(s))}</small></button>`).join('')}`).join('')}</div>` : ''}
+        ${ui.acc === 'stand' ? `<div class="daccbody">${standListeHtml()}</div>` : ''}
       </div>
       ${gruppen().map(g => g.acc
         ? (g.items.length ? `<div class="dacc${ui.acc === g.acc ? ' offen' : ''}"><button class="dacchead" data-acc="${g.acc}"><span class="ic">${g.ic}</span><span>${esc(g.titel)}</span>${I.down}</button>
-            ${ui.acc === g.acc ? `<div class="daccbody">${g.items.map(i => eintrag(...i)).join('')}</div>` : ''}</div>` : '')
-        : (g.items.length ? `<h4>${esc(g.titel)}</h4><div class="dsec">${g.items.map(i => eintrag(...i)).join('')}</div>` : '')).join('')}
+            ${ui.acc === g.acc ? `<div class="daccbody">${g.items.map(eintragX).join('')}</div>` : ''}</div>` : '')
+        : (g.items.length ? `<h4>${esc(g.titel)}</h4><div class="dsec">${g.items.map(eintragX).join('')}</div>` : '')).join('')}
     <div class="dfoot">
       ${eintrag('feedback', I.chat, 'Rückmeldung')}${eintrag('anzeige', I.eye, 'Anzeige')}
       <button class="ditem" data-logout><span class="ic">${I.out}</span><span>Abmelden</span></button>
       ${DEMO ? demoHtml() : ''}
       <p class="hint">Version ${APP_VERSION}</p>
-    </div></div></nav></div>`;
+    </div></div>`;
 }
-function bindDrawer() {
+function drawerHtml(gedockt) {
+  if (gedockt) return `<nav class="drawer docked" data-dnav aria-label="Menü">${drawerInhalt()}</nav>`;
+  const anim = !ui.drawerShown; ui.drawerShown = true;
+  return `<div class="dscrim${anim ? ' anim' : ''}" data-dscrim><nav class="drawer" data-dnav aria-label="Menü">${drawerInhalt()}</nav></div>`;
+}
+function drawerNeu() {
+  const nav = app.querySelector('[data-dnav]'); if (!nav) return;
+  const scr = app.querySelector('[data-dscrim]'); if (scr) scr.classList.remove('anim');
+  const sc = nav.querySelector('.dbody').scrollTop;
+  nav.innerHTML = drawerInhalt();
+  nav.querySelector('.dbody').scrollTop = sc;
+  bindDrawer(nav.classList.contains('docked'));
+}
+function bindDrawer(gedockt) {
+  const nav = app.querySelector('[data-dnav]');
   const sc = app.querySelector('[data-dscrim]');
-  const zu = () => { ui.drawer = false; render(); };
-  sc.addEventListener('click', e => { if (e.target === sc) zu(); });
-  sc.querySelectorAll('[data-acc]').forEach(b => b.addEventListener('click', () => { ui.acc = ui.acc === b.dataset.acc ? null : b.dataset.acc; render(); }));
-  sc.querySelectorAll('[data-dgo]').forEach(b => b.addEventListener('click', () => b.dataset.dgo === 'kasse' ? home() : go(b.dataset.dgo)));
-  sc.querySelectorAll('[data-stand]').forEach(b => b.addEventListener('click', () => standWaehlen(b.dataset.stand)));
-  sc.querySelector('[data-logout]').addEventListener('click', () => { if (S.queue.length && !confirmLogout()) return; logout(); });
-  if (DEMO) bindDemo(sc);
+  if (sc && !sc.dataset.bound) { sc.dataset.bound = '1'; sc.addEventListener('click', e => { if (e.target === sc) { ui.drawer = false; drawerUmschalten(); } }); }
+  nav.querySelectorAll('[data-acc]').forEach(b => b.addEventListener('click', () => { ui.acc = ui.acc === b.dataset.acc ? null : b.dataset.acc; drawerNeu(); }));
+  nav.querySelectorAll('[data-dgo]').forEach(b => b.addEventListener('click', () => verlassen(() => b.dataset.dgo === 'kasse' ? home() : go(b.dataset.dgo))));
+  nav.querySelectorAll('[data-stand]').forEach(b => b.addEventListener('click', () => verlassen(() => standWaehlen(b.dataset.stand))));
+  nav.querySelector('[data-logout]').addEventListener('click', () => verlassen(() => { if (S.queue.length && !confirmLogout()) return; logout(); }));
+  if (DEMO) bindDemo(nav);
 }
 function confirmLogout() { return window.confirm(S.queue.length + ' Einträge sind noch nicht übertragen. Sie werden weiter übertragen. Abmelden?'); }
 function standWaehlen(id) {
-  if (S.stand_id !== id) { S.cart = {}; ui.kat = 'Alle'; ui.q = ''; }
+  if (S.stand_id !== id) { S.cart = {}; ui.kat = 'Alle'; ui.q = ''; ui.rueckgeld = null; }
   S.stand_id = id; ui.drawer = false; ui.acc = null; ui.page = null; ui.overlay = null;
   render(); loadImages();
 }
@@ -636,6 +780,35 @@ function renderErsteDaten() {
   document.getElementById('lo').addEventListener('click', logout);
 }
 
+/* Erste Anmeldung nach Einführung der Stämme: einmal selbst zuordnen */
+function renderGruppeWaehlen() {
+  app.innerHTML = `<div class="screen"><div class="start login">${loginKopf()}
+    <h2 style="margin:0">${GRUPPE} wählen</h2>
+    <div class="gwahl">${GRUPPEN_L().map(g => `<button class="btn ghost wide" data-gw="${esc(g.gruppe_id)}">${esc(g.name)}</button>`).join('')}</div>
+    <div class="whoami"><span>${esc(S.user.name)}</span><button class="mini-btn" id="lo">Abmelden</button></div></div></div>`;
+  app.querySelectorAll('[data-gw]').forEach(b => b.addEventListener('click', () => tue(b, async () => {
+    const r = await call({ aktion: 'gruppe_waehlen', gruppe_id: b.dataset.gw }, true);
+    if (r.ok) { S.user.gruppe_id = r.benutzer.gruppe_id; D.v = ''; await sync(); render(); }
+  })));
+  document.getElementById('lo').addEventListener('click', logout);
+}
+
+/* ---------- Auf den Startbildschirm (sonst löscht Safari nach 7 Tagen die Daten) ---------- */
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvent = e; });
+const istIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const installiert = () => window.navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+const installMoeglich = () => !DEMO && !installiert() && (istIOS() || !!installEvent);
+function installHinweis() { if (S.installGezeigt || !installMoeglich() || ui.overlay || ui.page) return; S.installGezeigt = true; save(); go('install'); }
+OV.install = {
+  titel: () => 'Auf den Startbildschirm',
+  body: () => istIOS() && !installEvent
+    ? `<div class="install"><img src="icon-192.png" alt=""><ol><li>Unten auf <b>Teilen</b> ${I.send}</li><li><b>Zum Home-Bildschirm</b></li></ol></div>`
+    : `<div class="install"><img src="icon-192.png" alt=""><p style="margin:0">Kasse als App installieren</p></div>`,
+  footer: () => `<button class="btn ghost" data-close>Später</button>${installEvent ? '<button class="btn" style="flex:1" data-x="inst">Installieren</button>' : ''}`,
+  bind: root => { const b = root.querySelector('[data-x="inst"]'); if (b) b.addEventListener('click', async () => { try { installEvent.prompt(); await installEvent.userChoice; } catch (e) {} installEvent = null; closeOverlay(); }); }
+};
+
 /* ---------- Stand wählen (Startseite ohne Stand) ---------- */
 function naechsteZeit(st) {
   const t = today();
@@ -689,6 +862,53 @@ async function redeem(code) {
 }
 
 /* ---------- Kasse ---------- */
+function zelleHtml(p, st) {
+  const n = S.cart[p.produkt_id] || 0, pr = preis(p, st);
+  const av = availOf(st.stand_id, p.produkt_id), out = av !== 'verfuegbar';
+  const src = p.bild ? imgUrl('bilder', p.bild) : '';
+  return `<div class="cell" data-cell="${esc(p.produkt_id)}"><button class="tile${n ? ' in' : ''}${out ? ' out' : ''}" data-p="${esc(p.produkt_id)}" aria-label="${esc(p.name)}, ${eur(pr)}${n ? ', ' + n + ' im Warenkorb' : ''}${out ? ', ausverkauft' : ''}">
+      <span class="pic" style="background:${esc(kat(p.kategorie).farbe || '#5E6A61')}">${src ? `<img src="${src}" alt="">` : esc(initials(p.name))}${out ? `<span class="tag">${av === 'nicht_da' ? 'ausgeblendet' : 'ausverkauft'}</span>` : ''}</span>
+      ${n ? `<span class="qty num">${n}</span>` : ''}
+      <span class="tx"><span class="nm">${esc(p.name)}</span><span class="pr num${pr < 0 ? ' neg' : ''}">${eur(pr)}</span></span>
+    </button><button class="info" data-info="${esc(p.produkt_id)}" aria-label="Infos zu ${esc(p.name)}">i</button>${n ? `<button class="tiledel" data-tdel="${esc(p.produkt_id)}" aria-label="${esc(p.name)} entfernen">${I.trash}</button>` : ''}</div>`;
+}
+function bindZelle(c) {
+  const t = c.querySelector('.tile'), pid = t.dataset.p;
+  let timer = null, long = false;
+  t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { long = true; change(pid, -1); }, 480); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => t.addEventListener(ev, () => clearTimeout(timer)));
+  t.addEventListener('contextmenu', e => e.preventDefault());
+  t.addEventListener('click', () => { if (long) { long = false; return; } change(pid, +1); });
+  c.querySelector('[data-info]').addEventListener('click', () => go('info', pid));
+  const d = c.querySelector('[data-tdel]'); if (d) d.addEventListener('click', () => { const alt = S.cart[pid] || 0; delete S.cart[pid]; pfandMit(pid, -alt); kasseAktualisieren([pid, pfandVon(pid)]); });
+}
+/* Letzter eigener Bon an diesem Stand (zum Korrigieren) */
+function letzterBon() {
+  if (S.nachtrag) return null;
+  const b = myBons()[0];
+  if (!b || b.stand_id !== S.stand_id || b.status !== 'ok' || !stornoable().includes(b.bon_id) || Date.now() - new Date(b.zeit).getTime() > 20 * 60000) return null;
+  return b;
+}
+function fussHtml() {
+  const total = cartTotal(), count = cartCount(), payout = total < 0, lb = letzterBon();
+  return `${lb && !count ? `<div class="lastbon"><span class="num">Letzter Bon ${eur(lb.summe)} · ${fmtClock(lb.zeit)}</span><button class="mini-btn" data-korr="${esc(lb.bon_id)}">Korrigieren</button></div>` : ''}
+  <div class="bar">
+    <button class="sum${payout ? ' payout' : ''}" data-cart ${count ? '' : 'disabled'}>
+      <small>${payout ? 'Auszahlung · ' : ''}${count} Artikel</small>
+      <b class="num">${payout ? '↑ ' + eur(-total) : eur(total)}</b>
+    </button>
+    <button class="btn${payout && !S.nachtrag ? ' payout' : ''}" data-pay ${count ? '' : 'disabled'}>${S.nachtrag ? 'Speichern' : payout ? 'Auszahlen' : 'Kassieren'}</button>
+  </div>`;
+}
+function bindFuss(root) {
+  root.querySelector('[data-cart]').addEventListener('click', () => go('cart'));
+  root.querySelector('[data-pay]').addEventListener('click', () => S.nachtrag ? saveBon() : go('pay'));
+  const k = root.querySelector('[data-korr]'); if (k) k.addEventListener('click', () => { ui.korr = k.dataset.korr; go('korrigieren'); });
+}
+function rgeldHtml() {
+  const r = ui.rueckgeld; if (!r) return '';
+  return `<button class="rgeld${r.aus ? ' aus' : ''}" data-rgeld>${r.aus ? `<small>Auszahlen</small><b class="num">↑ ${eur(r.betrag)}</b>` : `<small>Rückgeld · gegeben ${eur(r.gegeben)}</small><b class="num">${eur(r.betrag)}</b>`}</button>`;
+}
 function kasse() {
   const st = stand();
   const sortiment = sortimentFor(st);
@@ -703,18 +923,9 @@ function kasse() {
   const grouped = !q && ui.kat === 'Alle' && cats.length > 1;
   for (const p of items) {
     if (grouped && p.kategorie !== last) { grid += `<div class="grouphead">${esc(p.kategorie)}</div>`; last = p.kategorie; }
-    const n = S.cart[p.produkt_id] || 0, pr = preis(p, st);
-    const av = availOf(st.stand_id, p.produkt_id), out = av !== 'verfuegbar';
-    const src = p.bild ? imgUrl('bilder', p.bild) : '';
-    const info = true;
-    grid += `<div class="cell"><button class="tile${n ? ' in' : ''}${out ? ' out' : ''}" data-p="${esc(p.produkt_id)}" aria-label="${esc(p.name)}, ${eur(pr)}${n ? ', ' + n + ' im Warenkorb' : ''}${out ? ', ausverkauft' : ''}">
-      <span class="pic" style="background:${esc(kat(p.kategorie).farbe || '#5E6A61')}">${src ? `<img src="${src}" alt="">` : esc(initials(p.name))}${out ? `<span class="tag">${av === 'nicht_da' ? 'ausgeblendet' : 'ausverkauft'}</span>` : ''}</span>
-      ${n ? `<span class="qty num">${n}</span>` : ''}
-      <span class="tx"><span class="nm">${esc(p.name)}</span><span class="pr num${pr < 0 ? ' neg' : ''}">${eur(pr)}</span></span>
-    </button>${info ? `<button class="info" data-info="${esc(p.produkt_id)}" aria-label="Infos zu ${esc(p.name)}">i</button>` : ''}${n ? `<button class="tiledel" data-tdel="${esc(p.produkt_id)}" aria-label="${esc(p.name)} entfernen">${I.trash}</button>` : ''}</div>`;
+    grid += zelleHtml(p, st);
   }
   if (!items.length) grid = listeLeer(q ? 'Nichts gefunden' : 'Keine Produkte');
-  const total = cartTotal(), count = cartCount(), payout = total < 0;
   const ausserhalb = !S.nachtrag && !inStandzeit(st);
   const html = `
   ${S.nachtrag ? `<div class="banner"><span>Nachtrag · ${fmtTime(S.nachtrag.zeit)}</span><button data-endnt>Beenden</button></div>` : ''}
@@ -723,38 +934,46 @@ function kasse() {
     <label class="search">${I.search}<input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}" aria-label="Produkt suchen"></label>
     <div class="chips" role="toolbar" aria-label="Kategorien">${['Alle', ...cats].map(c => `<button class="chip" data-k="${esc(c)}" aria-pressed="${!q && ui.kat === c}">${esc(c)}</button>`).join('')}</div>
   </div>
-  <div class="gridwrap" id="gw"><div class="grid">${grid}</div></div>
-  <div class="bar">
-    <button class="sum${payout ? ' payout' : ''}" data-cart ${count ? '' : 'disabled'}>
-      <small>${payout ? 'Auszahlung · ' : ''}${count} Artikel</small>
-      <b class="num">${payout ? '↑ ' + eur(-total) : eur(total)}</b>
-    </button>
-    <button class="btn${payout && !S.nachtrag ? ' payout' : ''}" data-pay ${count ? '' : 'disabled'}>${S.nachtrag ? 'Speichern' : payout ? 'Auszahlen' : 'Kassieren'}</button>
-  </div>`;
+  <div class="gridwrap" id="gw">${rgeldHtml()}<div class="grid">${grid}</div></div>
+  <div class="kfuss" id="kf">${fussHtml()}</div>`;
   return [html, root => {
     const qi = root.querySelector('#q');
     qi.addEventListener('input', () => { ui.q = qi.value; const pos = qi.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); });
     root.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => { ui.kat = b.dataset.k; ui.q = ''; render(); document.getElementById('gw').scrollTop = 0; }));
-    root.querySelectorAll('.tile').forEach(t => {
-      let timer = null, long = false;
-      const pid = t.dataset.p;
-      t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { long = true; change(pid, -1); }, 480); });
-      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => t.addEventListener(ev, () => clearTimeout(timer)));
-      t.addEventListener('contextmenu', e => e.preventDefault());
-      t.addEventListener('click', () => { if (long) { long = false; return; } change(pid, +1); });
-    });
-    root.querySelectorAll('[data-info]').forEach(b => b.addEventListener('click', () => go('info', b.dataset.info)));
-    root.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', () => { delete S.cart[b.dataset.tdel]; render(); }));
-    root.querySelector('[data-cart]').addEventListener('click', () => go('cart'));
-    root.querySelector('[data-pay]').addEventListener('click', () => S.nachtrag ? saveBon() : go('pay'));
+    root.querySelectorAll('.cell[data-cell]').forEach(bindZelle);
+    bindFuss(root);
+    const rg = root.querySelector('[data-rgeld]'); if (rg) rg.addEventListener('click', () => { ui.rueckgeld = null; rg.remove(); });
     const nt = root.querySelector('[data-endnt]'); if (nt) nt.addEventListener('click', () => { S.nachtrag = null; S.cart = {}; render(); });
   }];
 }
+/* Nur die getippte Kachel und die Summe neu zeichnen: schnell auch auf älteren Handys */
+function kasseAktualisieren(pids) {
+  const kf = app.querySelector('#kf');
+  if (ui.page || ui.overlay || !kf || !S.stand_id || app.querySelector('[data-scrim], [data-ov]')) return render();
+  const st = stand();
+  const rg = app.querySelector('[data-rgeld]'); if (rg) { rg.remove(); ui.rueckgeld = null; }
+  [...new Set(pids.filter(Boolean))].forEach(pid => {
+    const c = app.querySelector(`.cell[data-cell="${CSS.escape(pid)}"]`), p = prod(pid);
+    if (!c || !p) return;
+    c.insertAdjacentHTML('afterend', zelleHtml(p, st));
+    const neu = c.nextElementSibling; c.remove(); bindZelle(neu);
+  });
+  kf.innerHTML = fussHtml(); bindFuss(kf);
+  save();
+}
+/* Pfand: gekoppeltes Produkt kommt automatisch mit */
+const pfandVon = pid => { const p = prod(pid); return p && p.pfand_id && prod(p.pfand_id) ? p.pfand_id : null; };
+function pfandMit(pid, d) {
+  const pf = pfandVon(pid); if (!pf || !d) return;
+  const n = Math.max(0, (S.cart[pf] || 0) + d);
+  if (n) S.cart[pf] = n; else delete S.cart[pf];
+}
 function change(pid, d) {
   if (d > 0 && availOf(S.stand_id, pid) !== 'verfuegbar') return go('info', pid);
-  const n = Math.max(0, (S.cart[pid] || 0) + d);
+  const alt = S.cart[pid] || 0, n = Math.max(0, alt + d);
   if (n) S.cart[pid] = n; else delete S.cart[pid];
-  render();
+  if (n !== alt) pfandMit(pid, n - alt);
+  kasseAktualisieren([pid, pfandVon(pid)]);
 }
 
 function linesHtml() {
@@ -765,9 +984,9 @@ function linesHtml() {
     <button class="del" data-del="${esc(l.p.produkt_id)}" aria-label="entfernen">${I.trash}</button></div>`).join('')}</div>`;
 }
 function bindLines(root) {
-  root.querySelectorAll('[data-inc]').forEach(b => b.addEventListener('click', () => { S.cart[b.dataset.inc] = (S.cart[b.dataset.inc] || 0) + 1; render(); }));
-  root.querySelectorAll('[data-dec]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.dec; S.cart[id] = (S.cart[id] || 0) - 1; if (S.cart[id] <= 0) delete S.cart[id]; if (!cartCount()) ui.overlay = null; render(); }));
-  root.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { delete S.cart[b.dataset.del]; if (!cartCount()) ui.overlay = null; render(); }));
+  root.querySelectorAll('[data-inc]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.inc; S.cart[id] = (S.cart[id] || 0) + 1; pfandMit(id, 1); render(); }));
+  root.querySelectorAll('[data-dec]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.dec; S.cart[id] = (S.cart[id] || 0) - 1; if (S.cart[id] <= 0) delete S.cart[id]; pfandMit(id, -1); if (!cartCount()) ui.overlay = null; render(); }));
+  root.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.del, alt = S.cart[id] || 0; delete S.cart[id]; pfandMit(id, -alt); if (!cartCount()) ui.overlay = null; render(); }));
 }
 
 OV.cart = {
@@ -781,6 +1000,7 @@ OV.cart = {
   }
 };
 
+const scheinText = v => v < 1 ? Math.round(v * 100) + ' ct' : (Number.isInteger(v) ? v : v.toFixed(2).replace('.', ',')) + ' €';
 OV.pay = {
   open: () => { ui.payGiven = null; ui.payParts = []; ui.payInput = ''; },
   titel: () => cartTotal() < 0 ? 'Auszahlen' : 'Kassieren',
@@ -788,25 +1008,28 @@ OV.pay = {
     const total = cartTotal(), payout = total < 0, given = ui.payGiven;
     let change = '';
     if (!payout && given != null) change = given < total ? `<div class="change short"><small>Es fehlen</small><b class="num">${eur(total - given)}</b></div>` : `<div class="change"><small>Rückgeld</small><b class="num">${eur(given - total)}</b></div>`;
-    const notes = (E().schnellbetraege || [1, 2, 5, 10, 20, 50]).slice().sort((a, b) => a - b);
+    const notes = (E().schnellbetraege || [0.5, 1, 2, 5, 10, 20, 50]).slice().sort((a, b) => a - b);
     return `${linesHtml()}
       ${payout ? `<div class="due payout"><small>Auszahlen</small><b class="num">↑ ${eur(-total)}</b></div>`
       : `<div class="due"><small>Zu zahlen</small><b class="num">${eur(total)}</b></div>
       <div class="field"><label>Gegeben</label>
-        <div class="cash">${notes.map(v => { const c = ui.payParts.filter(x => x === v * 100).length; return `<button data-g="${v * 100}">${v} €${c ? `<span class="cnt">${c}×</span>` : ''}</button>`; }).join('')}</div>
-        <div class="givenrow"><span class="num">${given == null ? '' : '<b>' + eur(given) + '</b>' + (ui.payParts.length > 1 ? ' (' + ui.payParts.map(x => x / 100 + ' €').join(' + ') + ')' : '')}</span>
-          <span><button class="mini-btn" data-x="passend">Passend</button>${given != null ? '<button class="mini-btn" data-x="reset">Zurücksetzen</button>' : ''}</span></div></div>
+        <div class="cash">${notes.map(v => { const c = Math.round(v * 100), n = ui.payParts.filter(x => x === c).length; return `<button data-g="${c}">${scheinText(v)}${n ? `<span class="cnt">${n}×</span>` : ''}</button>`; }).join('')}</div>
+        ${given != null ? `<div class="givenrow"><span class="num"><b>${eur(given)}</b>${ui.payParts.length > 1 ? ' (' + ui.payParts.map(x => eur(x)).join(' + ') + ')' : ''}</span>
+          <span>${ui.payParts.length ? `<button class="mini-btn" data-x="undo" aria-label="Letzten Betrag entfernen">↶</button>` : ''}<button class="mini-btn" data-x="reset">Zurücksetzen</button></span></div>` : ''}</div>
       <div class="field"><input id="g-in" inputmode="decimal" placeholder="Betrag" aria-label="Gegebener Betrag" value="${esc(ui.payInput)}"></div>
       ${change}`}`;
   },
-  footer: () => { const t = cartTotal(), short = t >= 0 && ui.payGiven != null && ui.payGiven < t; return `<button class="btn ghost" data-close>Zurück</button><button class="btn${t < 0 ? ' payout' : ''}" style="flex:1" data-x="save" ${short ? 'disabled' : ''}>${t < 0 ? 'Ausgezahlt' : 'Bezahlt'}</button>`; },
+  footer: () => {
+    const t = cartTotal(), short = t >= 0 && ui.payGiven != null && ui.payGiven < t;
+    return `<button class="btn ghost" data-close>Zurück</button><button class="btn${t < 0 ? ' payout' : ''}" style="flex:1" data-x="save" ${short ? 'disabled' : ''}>${t < 0 ? 'Ausgezahlt' : ui.payGiven == null ? 'Passend bezahlt' : 'Bezahlt'}</button>`;
+  },
   bind: root => {
     bindLines(root);
     root.querySelectorAll('[data-g]').forEach(b => b.addEventListener('click', () => { ui.payParts.push(+b.dataset.g); ui.payGiven = ui.payParts.reduce((a, x) => a + x, 0); ui.payInput = ''; render(); }));
     const gi = root.querySelector('#g-in');
     if (gi) gi.addEventListener('input', () => { ui.payInput = gi.value; const v = parseFloat(gi.value.replace(',', '.')); ui.payGiven = isNaN(v) ? null : Math.round(v * 100); ui.payParts = []; const pos = gi.selectionStart; render(); const n = app.querySelector('#g-in'); n.focus(); n.setSelectionRange(pos, pos); });
     const x = (k, f) => { const b = root.querySelector(`[data-x="${k}"]`); if (b) b.addEventListener('click', f); };
-    x('passend', () => { ui.payGiven = cartTotal(); ui.payParts = []; ui.payInput = ''; render(); });
+    x('undo', () => { ui.payParts.pop(); ui.payGiven = ui.payParts.length ? ui.payParts.reduce((a, v) => a + v, 0) : null; render(); });
     x('reset', () => { ui.payGiven = null; ui.payParts = []; ui.payInput = ''; render(); });
     x('save', saveBon);
   }
@@ -815,22 +1038,33 @@ OV.pay = {
 function saveBon() {
   const lines = cartLines(); if (!lines.length) return;
   const total = cartTotal(), nt = S.nachtrag;
+  const gegeben = nt ? null : (total < 0 ? 0 : (ui.payGiven == null ? total : ui.payGiven));
   const bon = {
-    bon_id: uid(), zeit: nt ? nt.zeit : new Date().toISOString(), stand_id: nt ? nt.stand_id : S.stand_id,
+    bon_id: uid(), zeit: nt ? nt.zeit : jetzt().toISOString(), stand_id: nt ? nt.stand_id : S.stand_id,
     benutzer_id: S.user.benutzer_id, geraet_id: S.geraet_id, anzahl_artikel: cartCount(), summe: total,
-    gegeben: nt ? null : (total < 0 ? 0 : (ui.payGiven == null ? total : ui.payGiven)),
-    rueckgeld: nt ? null : (total < 0 ? -total : (ui.payGiven == null ? 0 : ui.payGiven - total)),
+    gegeben, rueckgeld: nt ? null : (total < 0 ? -total : gegeben - total),
     status: 'ok', art: nt ? 'nachtrag' : 'kasse',
     positionen: lines.map((l, i) => ({ pos_nr: i + 1, produkt_id: l.p.produkt_id, produktname: l.p.name, kategorie: l.p.kategorie, einzelpreis: l.einzel, menge: l.menge, zeilensumme: l.summe }))
   };
   S.bons.push(bon);
   S.cart = {}; ui.overlay = null;
+  ui.rueckgeld = nt ? null : total < 0 ? { aus: true, betrag: -total } : bon.rueckgeld > 0 ? { betrag: bon.rueckgeld, gegeben: ui.payGiven } : null;
   enqueue('Bon', bon);
   render();
   if (nt) toast(`Nachtrag ${eur(total)}`);
-  else if (total < 0) toast(`<b class="neg-t">↑ ${eur(-total)} auszahlen</b>`);
-  else toast(bon.rueckgeld ? `Rückgeld <b>${eur(bon.rueckgeld)}</b>` : 'Gespeichert');
 }
+/* Letzten Bon korrigieren: stornieren und Inhalt zurück in den Warenkorb */
+OV.korrigieren = {
+  titel: () => 'Bon korrigieren?',
+  body: () => { const b = S.bons.find(x => x.bon_id === ui.korr); return b ? `<p style="margin:0;font-size:18px"><b class="num">${eur(b.summe)}</b> · ${fmtClock(b.zeit)}</p><span class="muted">${esc(b.positionen.map(p => p.menge + '× ' + p.produktname).join(', '))}</span>` : ''; },
+  footer: () => `<button class="btn ghost" data-close>Abbrechen</button><button class="btn" style="flex:1" data-x="ja">Stornieren und ändern</button>`,
+  bind: root => root.querySelector('[data-x="ja"]').addEventListener('click', () => {
+    const b = S.bons.find(x => x.bon_id === ui.korr); if (!b) return closeOverlay();
+    stornoEnqueue(b.bon_id, true);
+    S.cart = {}; b.positionen.forEach(p => { if (prod(p.produkt_id)) S.cart[p.produkt_id] = (S.cart[p.produkt_id] || 0) + p.menge; });
+    ui.rueckgeld = null; ui.overlay = null; render(); toast('Storniert · im Warenkorb');
+  })
+};
 
 /* Hinweis, wenn die Aufgabe Standleitung nicht zur Rolle passt */
 OV.rolle = {
@@ -888,7 +1122,7 @@ OV.verfFrage = {
   bind: root => root.querySelector('[data-x="ja"]').addEventListener('click', () => verfuegbarkeit(ui.verfNeu))
 };
 OV.bild = {
-  screen: true, zurueck: () => 'info',
+  screen: true, zurueck: () => ui.page ? null : 'info',
   body: () => `<div class="zoomview"><img src="${ui.zoom}" alt=""><button class="close big" data-close aria-label="Schließen">×</button></div>`
 };
 
@@ -903,16 +1137,23 @@ window.addEventListener('DOMContentLoaded', async () => {
   try { history.replaceState({ page: null }, ''); } catch (e) {}
   render();
   if (S.user || S.queue.length) sync();
-  const every = () => Math.max(20, (E().abgleich_sekunden || 60)) * 1000;
+  // Abgleich: Leitungen öfter (Hinweise), wer nur kassiert seltener; Bons gehen trotzdem sofort raus
+  const every = () => { const b = Math.max(20, (E().abgleich_sekunden || 60)); return (rang() >= 2 && D && D.rechte && D.rechte.staende.length ? b : b * 2) * 1000; };
   (function loop() { setTimeout(() => { if (!document.hidden) sync(); loop(); }, every()); })();
   window.addEventListener('online', () => { net.ok = null; sync(); });
   window.addEventListener('offline', () => { net.ok = false; paintChip(); });
   window.addEventListener('popstate', e => {
-    if (ui.drawer) { ui.drawer = false; return render(); }
+    if (app.querySelector('[data-ungesp]')) { app.querySelector('[data-ungesp]').remove(); try { history.pushState({ page: ui.page }, ''); } catch (x) {} return; }
+    if (ui.drawer) { ui.drawer = false; return drawerUmschalten(); }
     if (ui.overlay) { ui.overlay = null; return render(); }
     const p = e.state && e.state.page;
-    ui.page = p && P[p] ? p : null; render();
+    const weiter = () => { ui.page = p && P[p] ? p : null; render(); };
+    if (ungespeichert()) { try { history.pushState({ page: ui.page }, ''); } catch (x) {} return verlassen(weiter); }
+    weiter();
   });
+  let breit = dock();
+  window.addEventListener('resize', () => { if (dock() !== breit) { breit = dock(); const a = document.activeElement; if (!(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) render(); } });
+  try { if (navigator.storage && navigator.storage.persist && !DEMO) navigator.storage.persist(); } catch (e) {}
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { keepAwake(); sync(); } });
   keepAwake();
   if ('serviceWorker' in navigator && !DEMO) { try { navigator.serviceWorker.register('sw.js'); } catch (e) {} }

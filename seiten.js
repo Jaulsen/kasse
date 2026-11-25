@@ -1,4 +1,4 @@
-/* Weihnachtsmarkt-Kasse · App 2.1 · Seiten für Verkauf, Schichten und Standleitung */
+/* Weihnachtsmarkt-Kasse · App 2.5 · Seiten für Verkauf, Schichten und Standleitung */
 'use strict';
 
 /* Vom Server geladene Listen: zuletzt Geladenes sofort zeigen, im Hintergrund aktualisieren */
@@ -40,11 +40,11 @@ function bindConfirm(root, onYes, attr = 'storno') {
   root.querySelectorAll('[data-nein]').forEach(b => b.addEventListener('click', () => { ui.confirm = null; render(); }));
   root.querySelectorAll(`[data-${attr}]`).forEach(b => b.addEventListener('click', () => { const id = b.dataset[attr]; ui.confirm = null; onYes(id, b); }));
 }
-function stornoEnqueue(id) {
+function stornoEnqueue(id, still) {
   const b = S.bons.find(x => x.bon_id === id); if (b) b.status = 'storniert';
   const pending = S.queue.find(q => q.typ === 'Bon' && q.data.bon_id === id); if (pending) pending.data.status = 'storniert';
   enqueue('Storno', { bon_id: id });
-  render(); toast('Storniert');
+  if (!still) { render(); toast('Storniert'); }
 }
 P.bons = {
   titel: 'Meine Bons',
@@ -53,7 +53,7 @@ P.bons = {
 };
 
 /* ---------- Meine Schichten: eigene Schichten und Eintragen an einem Ort ---------- */
-const STATUS_TEXT = { vorgeschlagen: 'wartet auf Bestätigung', verknuepfung: 'Zuordnung offen', abgelehnt: 'abgelehnt' };
+const STATUS_TEXT = { vorgeschlagen: 'wartet auf Bestätigung', verknuepfung: 'Zuordnung offen', abgelehnt: 'abgelehnt', geplant: 'bestätigt' };
 const statusText = s => s.status === 'vorgeschlagen' && s.ersetzt ? 'Wechsel angefragt' : s.status === 'vorgeschlagen' && s.anfrage ? 'Zugang angefragt' : STATUS_TEXT[s.status];
 const kommendeTage = st => (st && st.standzeiten || []).filter(z => z.datum >= today());
 P.schichten = {
@@ -62,15 +62,18 @@ P.schichten = {
     ui.sfFehler = null; ui.sf = null;
     if (data && data.anfrage && S.stand_id) ui.sf = { stand_id: S.stand_id, datum: today(), anfrage: true };
   },
-  titel: () => ui.sf && ui.sf.anfrage ? 'Zugang anfragen' : 'Meine Schichten',
+  titel: () => ui.sf && ui.sf.anfrage ? 'Zugang anfragen' : ui.sf && ui.sf.schicht_id ? 'Schicht ändern' : 'Meine Schichten',
   body: () => {
     const meine = (D.schichten || []).filter(s => s.benutzer_id === S.user.benutzer_id && s.datum >= today()).sort((a, b) => (a.datum + a.von).localeCompare(b.datum + b.von));
+    const ersetzt = meine.map(s => s.ersetzt).filter(Boolean);
     const liste = meine.length ? meine.map(s => {
       const jetzt = s.datum === today() && nowMin() >= toMin(s.von) && nowMin() <= toMin(s.bis);
-      return `<div class="schicht${jetzt ? ' jetzt' : ''}${s.status !== 'geplant' ? ' offen' : ''}">
+      const aenderbar = s.status === 'vorgeschlagen' || (s.status === 'geplant' && !ersetzt.includes(s.schicht_id));
+      const wechsel = ersetzt.includes(s.schicht_id);
+      return `<div class="schicht${jetzt ? ' jetzt' : ''}${s.status !== 'geplant' ? ' offen' : ''}"${aenderbar && !ui.sf ? ` data-sedit="${esc(s.schicht_id)}" role="button" tabindex="0"` : ''}>
         <div class="sd"><b>${tagText(s.datum)}</b><span class="num">${s.von}–${s.bis}</span></div>
-        <div class="si"><b>${esc(s.aufgabe)}</b><span>${esc(standName(s.stand_id))}${statusText(s) ? ' · ' + statusText(s) : jetzt ? ' · jetzt' : ''}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</span></div>
-        ${s.status === 'vorgeschlagen' ? `<button class="del" data-sdel="${esc(s.schicht_id)}" aria-label="Vorschlag zurückziehen">${I.trash}</button>` : ''}</div>`;
+        <div class="si"><b>${esc(s.aufgabe)}</b><span>${esc(standName(s.stand_id))}${jetzt ? ' · jetzt' : ''}${wechsel ? ' · Wechsel läuft' : statusText(s) ? ' · ' + statusText(s) : ''}${wartet(s.schicht_id) ? ' <span class="spin sm"></span>' : ''}</span></div>
+        ${s.status === 'vorgeschlagen' ? `<button class="del" data-sdel="${esc(s.schicht_id)}" aria-label="Zurückziehen">${I.trash}</button>` : aenderbar ? `<span class="chev">${I.edit}</span>` : ''}</div>`;
     }).join('') : listeLeer('Noch keine Schicht');
     return (ui.sf ? eintragForm() : '') + liste;
   },
@@ -85,27 +88,51 @@ P.schichten = {
       ui.sf = { stand_id: st.stand_id, datum: z.datum }; ui.sfFehler = null; render();
       const pb = app.querySelector('#pb'); if (pb) pb.scrollTop = 0;
     });
-    root.querySelectorAll('[data-sdel]').forEach(b => b.addEventListener('click', () => { aktion('schicht_loeschen', { schicht_id: b.dataset.sdel }); render(); toast('Zurückgezogen'); }));
+    root.querySelectorAll('[data-sdel]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); aktion('schicht_loeschen', { schicht_id: b.dataset.sdel }); render(); toast('Zurückgezogen'); }));
+    // Eigene Schicht ändern: Vorschläge direkt, bestätigte als Wechsel
+    root.querySelectorAll('[data-sedit]').forEach(b => b.addEventListener('click', () => {
+      const s = D.schichten.find(x => x.schicht_id === b.dataset.sedit); if (!s) return;
+      ui.sf = { schicht_id: s.schicht_id, status: s.status, stand_id: s.stand_id, datum: s.datum, von: s.von, bis: s.bis, aufgabe: s.aufgabe }; ui.sfFehler = null; render();
+      const pb = app.querySelector('#pb'); if (pb) pb.scrollTop = 0;
+    }));
     const f = root.querySelector('.sform'); if (f) bindEintragForm(f);
   }
 };
+/* Belegung als Balken je Aufgabe, ohne Namen */
+function belegungHtml(sid, datum, sz, ausser, eigen) {
+  const l = (D.schichten || []).filter(s => s.stand_id === sid && s.datum === datum && s.status !== 'abgelehnt' && s.schicht_id !== ausser);
+  let a = toMin(sz.von), e = toMin(sz.bis);
+  l.forEach(s => { a = Math.min(a, toMin(s.von)); e = Math.max(e, toMin(s.bis)); });
+  a = Math.floor(a / 60) * 60; e = Math.ceil(e / 60) * 60;
+  const span = Math.max(60, e - a), pct = m => ((m - a) / span * 100).toFixed(2) + '%';
+  const aufg = [...new Set(l.map(s => s.aufgabe))].sort((x, y) => (D.aufgaben || []).indexOf(x) - (D.aufgaben || []).indexOf(y));
+  const stunden = []; for (let h = a / 60; h * 60 <= e; h += (span > 600 ? 2 : 1)) stunden.push(h);
+  const blk = (s, cls) => `<span class="blk${cls || ''}" style="left:${pct(toMin(s.von))};width:calc(${pct(toMin(s.bis))} - ${pct(toMin(s.von))});background:${aufgabeFarbe(s.aufgabe)}"></span>`;
+  return `<div class="beleg"><small>Belegung · Stand offen ${sz.von}–${sz.bis}</small>
+    <div class="scale">${stunden.map(h => `<span style="left:${pct(h * 60)}">${h}</span>`).join('')}</div>
+    ${aufg.map(x => `<div class="brow"><span>${esc(x)}</span><div class="track"><span class="offenzeit" style="left:${pct(toMin(sz.von))};width:calc(${pct(toMin(sz.bis))} - ${pct(toMin(sz.von))})"></span>${l.filter(s => s.aufgabe === x).map(s => blk(s, s.status !== 'geplant' ? ' vor' : '')).join('')}</div></div>`).join('') || '<span class="muted">noch niemand</span>'}
+    ${eigen && eigen.von && eigen.bis ? `<div class="brow mein"><span>Du</span><div class="track"><span class="blk" style="left:${pct(toMin(eigen.von))};width:calc(${pct(toMin(eigen.bis))} - ${pct(toMin(eigen.von))});background:var(--green)"></span></div></div>` : ''}</div>`;
+}
 function eintragForm() {
   const d = ui.sf, st = stand(d.stand_id);
   const tage = d.anfrage ? [kommendeTage(st).find(z => z.datum === today()) || { datum: today(), von: '10:00', bis: '20:00' }] : kommendeTage(st);
   if (!tage.some(z => z.datum === d.datum)) d.datum = tage[0] ? tage[0].datum : today();
   const sz = tage.find(z => z.datum === d.datum) || { von: '10:00', bis: '14:00' };
   const staende = STAENDE().filter(x => kommendeTage(x).length);
-  const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung');
-  const belegt = (D.schichten || []).filter(s => s.stand_id === d.stand_id && s.datum === d.datum && s.status !== 'abgelehnt').sort((a, b) => a.von.localeCompare(b.von));
+  const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung').concat(EGAL);
+  const wahl = d.aufgabe && aufg.includes(d.aufgabe) ? d.aufgabe : aufg[0];
+  const eigen = d.ganz !== false ? { von: sz.von, bis: sz.bis } : { von: d.von || sz.von, bis: d.bis || sz.bis };
   return `<div class="sform card">
-    ${d.anfrage ? `<b>${esc(st.name)} · heute</b><span class="muted">Trag deine Schicht ein. Nach der Bestätigung kannst du für diese Zeit kassieren.</span>` : staende.length > 1 ? `<div class="field"><label>Stand</label><div class="chips wrap" id="sf-s">${staende.map(x => `<button class="chip" data-s="${esc(x.stand_id)}" aria-pressed="${x.stand_id === d.stand_id}">${esc(x.name)}</button>`).join('')}</div></div>` : `<b>${esc(st.name)}</b>`}
+    ${d.anfrage ? `<b>${esc(st.name)} · heute</b>` : !d.schicht_id && staende.length > 1 ? `<div class="field"><label>Stand</label><div class="chips wrap" id="sf-s">${staende.map(x => `<button class="chip" data-s="${esc(x.stand_id)}" aria-pressed="${x.stand_id === d.stand_id}">${esc(x.name)}</button>`).join('')}</div></div>` : `<b>${esc(st.name)}</b>`}
     ${d.anfrage ? '' : `<div class="field"><label>Tag</label><div class="chips wrap" id="sf-t">${tage.map(z => `<button class="chip" data-t="${z.datum}" aria-pressed="${z.datum === d.datum}">${tagText(z.datum)}</button>`).join('')}</div></div>`}
     ${zeitFeld(d, sz)}
-    <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip" data-a="${esc(a)}" aria-pressed="${(d.aufgabe || aufg[0]) === a}">${esc(a)}</button>`).join('')}</div></div>
-    <div class="belegt"><small>Schon eingeteilt · Stand offen ${sz.von}–${sz.bis}</small>${belegt.length ? belegt.map(s => `<span>${s.von}–${s.bis} · ${esc(s.aufgabe)} · ${esc(s.name)}</span>`).join('') : '<span>noch niemand</span>'}</div>
+    <div class="field"><label>Aufgabe</label><div class="chips wrap" id="sf-a">${aufg.map(a => `<button class="chip${a === EGAL ? ' egal' : ''}" data-a="${esc(a)}" aria-pressed="${wahl === a}">${esc(a)}</button>`).join('')}</div></div>
+    ${belegungHtml(d.stand_id, d.datum, sz, d.schicht_id, eigen)}
+    ${d.status === 'geplant' ? '<p class="muted" style="margin:0">Änderung als Wechsel · die Standleitung bestätigt</p>' : ''}
     ${ui.sfFehler ? `<p class="err">${esc(ui.sfFehler)}</p>` : ''}
-    <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="spe">${d.anfrage ? 'Anfragen' : 'Eintragen'}</button></div></div>`;
+    <div class="acts"><button class="btn ghost sm" data-x="abbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="spe">${d.anfrage ? 'Anfragen' : d.schicht_id ? (d.status === 'geplant' ? 'Wechsel anfragen' : 'Ändern') : 'Eintragen'}</button></div></div>`;
 }
+const EGAL = 'Egal';
 function bindEintragForm(f) {
   const d = ui.sf;
   const sz = () => kommendeTage(stand(d.stand_id)).find(z => z.datum === d.datum) || { von: '10:00', bis: '14:00' };
@@ -115,24 +142,28 @@ function bindEintragForm(f) {
   f.querySelectorAll('#sf-s [data-s]').forEach(b => b.addEventListener('click', () => { erfassen(); d.stand_id = b.dataset.s; d.von = d.bis = null; if (d.ganz === false) d.ganz = undefined; render(); }));
   f.querySelectorAll('#sf-t [data-t]').forEach(b => b.addEventListener('click', () => { erfassen(); d.datum = b.dataset.t; d.von = d.bis = null; if (d.ganz === false) d.ganz = undefined; render(); }));
   f.querySelectorAll('#sf-a [data-a]').forEach(b => b.addEventListener('click', () => f.querySelectorAll('#sf-a [data-a]').forEach(x => x.setAttribute('aria-pressed', x === b))));
+  f.querySelectorAll('#sf-von, #sf-bis').forEach(i => i.addEventListener('change', () => { erfassen(); render(); }));
   f.querySelector('[data-x="abbr"]').addEventListener('click', () => { ui.sf = null; render(); });
   f.querySelector('[data-x="spe"]').addEventListener('click', () => {
     erfassen();
-    const schicht = { schicht_id: uid().replace(/-/g, '').slice(0, 10), stand_id: d.stand_id, datum: d.datum, von: d.von, bis: d.bis, aufgabe: d.aufgabe, benutzer_id: S.user.benutzer_id, anfrage: !!d.anfrage };
+    // Bestätigte Schicht: neue Schicht als Wechsel, die alte gilt bis zur Bestätigung
+    const wechsel = d.schicht_id && d.status === 'geplant';
+    const schicht = { schicht_id: !d.schicht_id || wechsel ? uid().replace(/-/g, '').slice(0, 10) : d.schicht_id, stand_id: d.stand_id, datum: d.datum, von: d.von, bis: d.bis, aufgabe: d.aufgabe, benutzer_id: S.user.benutzer_id, anfrage: !!d.anfrage };
+    if (wechsel) schicht.ersetzt = d.schicht_id;
     ui.sfFehler = !d.von || !d.bis || toMin(d.bis) <= toMin(d.von) ? 'Zeiten prüfen.' : null;
     if (ui.sfFehler) return render();
-    const alte = ueberschneidungen(S.user.benutzer_id, d.datum, d.von, d.bis, '');
+    const alte = ueberschneidungen(S.user.benutzer_id, d.datum, d.von, d.bis, [d.schicht_id]);
     if (alte.length) { ui.konflikt = { schicht, alte, name: S.user.name, form: 'sf' }; return go('konflikt'); }
     aktion('schicht_speichern', { schicht });
     const anfrage = d.anfrage;
     ui.sf = null;
-    if (anfrage) { home(); toast('Anfrage gesendet · die Standleitung bestätigt'); } else { render(); toast(leitet(d.stand_id) ? 'Eingetragen' : 'Eingetragen · wartet auf Bestätigung'); }
+    if (anfrage) { home(); toast('Anfrage gesendet · die Standleitung bestätigt'); } else { render(); toast(wechsel ? 'Wechsel angefragt' : leitet(d.stand_id) ? 'Gespeichert' : 'Eingetragen · wartet auf Bestätigung'); }
   });
 }
 
 /* ---------- Schichtplan / Personalplanung ---------- */
 const AUFGABE_FARBE = ['#1F6E24', '#2158A1', '#A8352A', '#B07A2A', '#6B4FA0', '#2E8A8A', '#8B5A2B'];
-const aufgabeFarbe = a => AUFGABE_FARBE[Math.max(0, (D.aufgaben || []).indexOf(a)) % AUFGABE_FARBE.length];
+const aufgabeFarbe = a => a === EGAL ? '#8A948C' : AUFGABE_FARBE[Math.max(0, (D.aufgaben || []).indexOf(a)) % AUFGABE_FARBE.length];
 const planSid = () => ui.planStand || S.stand_id;
 function planTage() {
   const st = stand(planSid()); const t = today();
@@ -145,6 +176,15 @@ function ueberschneidungen(benutzerId, datum, von, bis, ausser) {
   return (D.schichten || []).filter(s => benutzerId && s.benutzer_id === benutzerId && !aus.includes(s.schicht_id) && s.datum === datum && s.status !== 'abgelehnt' && toMin(s.von) < toMin(bis) && toMin(s.bis) > toMin(von));
 }
 const ueberschneidung = (...a) => ueberschneidungen(...a)[0];
+/* Zeiten in der Standzeit, in denen niemand eingeteilt ist: [['14:00', '16:00'], …] */
+function luecken(schichten, sz) {
+  const a = toMin(sz.von), e = toMin(sz.bis), hm = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+  const bl = schichten.map(s => [Math.max(a, toMin(s.von)), Math.min(e, toMin(s.bis))]).filter(x => x[1] > x[0]).sort((x, y) => x[0] - y[0]);
+  const out = []; let pos = a;
+  bl.forEach(x => { if (x[0] > pos) out.push([hm(pos), hm(x[0])]); pos = Math.max(pos, x[1]); });
+  if (pos < e) out.push([hm(pos), hm(e)]);
+  return out;
+}
 const schichtKurz = s => `${tagText(s.datum)} ${s.von}–${s.bis} · ${s.aufgabe} · ${standName(s.stand_id)}`;
 
 /* Zeit: ganztägig (Standzeit des Tages) oder eigenes Zeitfenster */
@@ -202,7 +242,7 @@ P.plan = {
     const tage = planTage();
     if (!ui.planTag || !tage.includes(ui.planTag)) ui.planTag = tage[0] || today();
     ui.planForm = data && data.benutzer_id ? { benutzer_id: data.benutzer_id, modus: 'b' } : null;
-    ui.planFehler = null;
+    ui.planFehler = null; ui.planKopie = null;
   },
   get form() { return !!ui.planForm; },
   body: () => {
@@ -228,14 +268,35 @@ P.plan = {
       </div>${offen ? schichtForm() : ''}`;
     };
     const neuOffen = ui.planForm && !ui.planForm.schicht_id;
+    // Abdeckung je Aufgabe: rot = Standzeit ohne Einteilung
+    const aufgaben = [...new Set(liste.map(s => s.aufgabe))].filter(x => x !== EGAL).sort((x, y) => (D.aufgaben || []).indexOf(x) - (D.aufgaben || []).indexOf(y));
+    const gesamt = sz ? luecken(liste.filter(s => s.status === 'geplant'), sz) : [];
+    const abdeckung = l && sz && liste.length ? `<div class="abdeckung"><div class="scale">${stunden.map(h => `<span style="left:${pct(h * 60)}">${h}</span>`).join('')}</div>
+      ${aufgaben.map(x => `<div class="brow"><span>${esc(x)}</span><div class="track"><span class="luecke" style="left:${pct(toMin(sz.von))};width:calc(${pct(toMin(sz.bis))} - ${pct(toMin(sz.von))})"></span>${liste.filter(s => s.aufgabe === x).map(s => `<span class="blk${s.status !== 'geplant' ? ' vor' : ''}" style="left:${pct(toMin(s.von))};width:calc(${pct(toMin(s.bis))} - ${pct(toMin(s.von))});background:${aufgabeFarbe(s.aufgabe)}"></span>`).join('')}${nowLine}</div></div>`).join('')}
+      ${gesamt.length ? `<p class="lueckentext">Niemand eingeteilt: ${gesamt.map(g => g[0] + '–' + g[1]).join(', ')}</p>` : ''}</div>` : '';
+    const kopie = ui.planKopie ? `<div class="card sform kform"><b>${tagText(tag)} kopieren nach</b><div class="chips wrap" id="pk-t">${tage.filter(t => t !== tag && t >= today()).map(t => `<button class="chip" data-kt="${t}" aria-pressed="${ui.planKopie.nach === t}">${tagText(t)}</button>`).join('') || '<span class="muted">Kein weiterer Tag</span>'}</div>
+      <div class="acts"><button class="btn ghost sm" data-x="kabbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="kok" ${ui.planKopie.nach ? '' : 'disabled'}>Kopieren</button></div></div>` : '';
     return `${tage.length > 1 ? `<div class="chips daytabs">${tage.map(t => `<button class="chip" data-tag="${t}" aria-pressed="${t === tag}">${tagText(t)}</button>`).join('')}</div>` : ''}
       <p class="muted" style="margin:0">${fmtDate(tag)}${sz ? ' · Stand ' + sz.von + '–' + sz.bis : ''}</p>
+      ${kopie}${abdeckung}
       ${neuOffen ? schichtForm() : ''}
       ${liste.length ? `<div class="scale">${stunden.map(h => `<span style="left:${pct(h * 60)}">${h}</span>`).join('')}</div>${liste.map(zeile).join('')}` : listeLeer('Noch niemand eingeteilt')}`;
   },
-  leiste: () => ui.planForm || !planSid() ? '' : `<button class="btn wide" data-neu>${leitet(planSid()) ? 'Schicht hinzufügen' : 'Mich eintragen'}</button>`,
+  leiste: () => ui.planForm || ui.planKopie || !planSid() ? '' : `${leitet(planSid()) && (D.schichten || []).some(s => s.stand_id === planSid() && s.datum === ui.planTag && s.status === 'geplant') ? '<button class="btn ghost" data-kopie>Tag kopieren</button>' : ''}<button class="btn" data-neu>${leitet(planSid()) ? 'Schicht hinzufügen' : 'Mich eintragen'}</button>`,
   bind: root => {
-    root.querySelectorAll('[data-tag]').forEach(b => b.addEventListener('click', () => { ui.planTag = b.dataset.tag; ui.planForm = null; render(); }));
+    root.querySelectorAll('[data-tag]').forEach(b => b.addEventListener('click', () => { ui.planTag = b.dataset.tag; ui.planForm = null; ui.planKopie = null; render(); }));
+    const kb = root.querySelector('[data-kopie]'); if (kb) kb.addEventListener('click', () => { ui.planKopie = { nach: '' }; render(); });
+    root.querySelectorAll('[data-kt]').forEach(b => b.addEventListener('click', () => { ui.planKopie.nach = b.dataset.kt; render(); }));
+    const ka = root.querySelector('[data-x="kabbr"]'); if (ka) ka.addEventListener('click', () => { ui.planKopie = null; render(); });
+    const ko = root.querySelector('[data-x="kok"]');
+    if (ko) ko.addEventListener('click', () => tue(ko, async () => {
+      const nach = ui.planKopie.nach;
+      const r = await call({ aktion: 'plan_kopieren', stand_id: planSid(), von_datum: ui.planTag, nach_datum: nach }, true);
+      if (!r.ok) return;
+      ui.planKopie = null; ui.planTag = nach;
+      toast(r.anzahl + ' Schichten kopiert' + (r.uebersprungen ? ' · ' + r.uebersprungen + ' schon eingeteilt' : ''));
+      await sync(); render();
+    }));
     const neu = root.querySelector('[data-neu]'); if (neu) neu.addEventListener('click', () => { ui.planForm = { modus: 'b' }; ui.planFehler = null; render(); root = app.querySelector('.page'); const pb = app.querySelector('#pb'); if (pb) pb.scrollTop = 0; });
     root.querySelectorAll('[data-sed]').forEach(b => b.addEventListener('click', e => {
       if (e.target.closest('button')) return;
@@ -250,7 +311,7 @@ P.plan = {
       aktion('hinweis_aktion', { typ: st === 'vorgeschlagen' ? 'schicht' : 'verknuepfung', id, aktion2: ja ? 'ja' : 'nein' });
       render();
     }));
-    const f = root.querySelector('.sform');
+    const f = root.querySelector('.sform:not(.kform)');
     if (f) bindSchichtForm(f);
   }
 };
@@ -258,8 +319,9 @@ function schichtForm() {
   const d = ui.planForm, l = leitet(planSid()), st = stand(planSid());
   const sz = (st.standzeiten || []).find(z => z.datum === ui.planTag) || { von: '10:00', bis: '14:00' };
   const tagSchichten = (D.schichten || []).filter(s => s.datum === ui.planTag && s.status !== 'abgelehnt' && s.schicht_id !== d.schicht_id);
-  const personen = (D.personen || []).map(p => { const x = tagSchichten.filter(s => s.benutzer_id === p.benutzer_id); return [p.benutzer_id, p.name + (x.length ? ' · eingeteilt ' + x.map(s => s.von + '–' + s.bis + (s.stand_id !== planSid() ? ' ' + standName(s.stand_id) : '')).join(', ') : '')]; });
-  const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung' || (l && d.modus !== 'p'));
+  const gid = (marktVon(st) || {}).gruppe_id;
+  const personen = (D.personen || []).filter(p => !gid || !p.gruppe_id || p.gruppe_id === gid).map(p => { const x = tagSchichten.filter(s => s.benutzer_id === p.benutzer_id); return [p.benutzer_id, p.name + (x.length ? ' · eingeteilt ' + x.map(s => s.von + '–' + s.bis + (s.stand_id !== planSid() ? ' ' + standName(s.stand_id) : '')).join(', ') : '')]; });
+  const aufg = (D.aufgaben || []).filter(a => a !== 'Standleitung' || (l && d.modus !== 'p')).concat(d.aufgabe === EGAL ? [EGAL] : []);
   return `<div class="sform card">
     <b>${d.schicht_id ? 'Schicht ändern' : l ? 'Neue Schicht' : 'Mich eintragen'} · ${tagText(ui.planTag)}</b>
     ${l ? `<div class="seg" id="sf-m"><button data-m="b" aria-pressed="${d.modus !== 'p'}">Person</button><button data-m="p" aria-pressed="${d.modus === 'p'}">Platzhalter</button></div>
@@ -347,14 +409,14 @@ P.hinweise = {
 
 /* ---------- Nachricht schreiben (Admin) ---------- */
 P.rundschreiben = {
-  form: true, eltern: 'hinweise',
+  form: true, eltern: 'hinweise', verwerfen: () => { ui.rs = null; },
   titel: 'Nachricht schreiben',
   open: () => { ui.rs = ui.rs || { art: 'alle', wert: '' }; },
   body: () => {
     const r = ui.rs;
-    const wahl = r.art === 'rolle' ? Object.keys(ROLLEN).map(x => [x, x]) : r.art === 'markt' ? MAERKTE().map(m => [m.markt_id, m.name]) : r.art === 'stand' ? STAENDE().map(st => [st.stand_id, st.name + ' · ' + ((marktVon(st) || {}).name || '')]) : [];
+    const wahl = r.art === 'rolle' ? Object.keys(ROLLEN).map(x => [x, x]) : r.art === 'gruppe' ? GRUPPEN_L().map(g => [g.gruppe_id, g.name]) : r.art === 'markt' ? MAERKTE().map(m => [m.markt_id, m.name]) : r.art === 'stand' ? STAENDE().map(st => [st.stand_id, st.name + ' · ' + ((marktVon(st) || {}).name || '')]) : [];
     if (wahl.length && !wahl.some(w => w[0] === r.wert)) r.wert = wahl[0][0];
-    return `<div class="field"><label>An</label><div class="seg" id="rs-a">${[['alle', 'Alle'], ['rolle', 'Rolle'], ['markt', 'Markt'], ['stand', 'Stand']].map(([k, t]) => `<button data-art="${k}" aria-pressed="${r.art === k}">${t}</button>`).join('')}</div></div>
+    return `<div class="field"><label>An</label><div class="seg" id="rs-a">${[['alle', 'Alle']].concat(GRUPPEN_L().length ? [['gruppe', GRUPPE]] : [], [['rolle', 'Rolle'], ['markt', 'Markt'], ['stand', 'Stand']]).map(([k, t]) => `<button data-art="${k}" aria-pressed="${r.art === k}">${t}</button>`).join('')}</div></div>
       ${wahl.length ? `<div class="field"><select id="rs-w" aria-label="Auswahl">${optionen(wahl, r.wert)}</select></div>` : ''}
       <div class="field"><label for="rs-t">Betreff</label><input id="rs-t" value="${esc(r.titel || '')}"></div>
       <div class="field"><label for="rs-x">Text</label><textarea id="rs-x" rows="6">${esc(r.text || '')}</textarea></div>
@@ -494,11 +556,11 @@ function bindVorlageForm(f) {
   }));
 }
 
-/* ---------- Umsatz heute ---------- */
+/* ---------- Umsatz heute (Marktleitung) ---------- */
 P.uebersicht = {
   stand: true, key: 'uebersicht',
   titel: 'Umsatz heute',
-  open: () => laden('uebersicht', { aktion: 'uebersicht', stand_id: S.stand_id }),
+  open: () => { if (rang() < 3) return 'heute'; laden('uebersicht', { aktion: 'uebersicht', stand_id: S.stand_id }); },
   body: () => geladen('uebersicht', x => {
     const s = x.staende[S.stand_id] || { bons: 0, summe: 0 };
     const andere = Object.keys(x.staende).filter(id => id !== S.stand_id);
@@ -507,6 +569,48 @@ P.uebersicht = {
       ${x.top.length ? `<h3 class="sub">Meistverkauft</h3>${x.top.map(t => `<div class="barrow"><span>${esc(t.name)}</span><span class="bv"><span style="width:${(t.menge / max * 100).toFixed(1)}%"></span></span><b class="num">${t.menge}</b></div>`).join('')}` : ''}
       ${andere.length ? `<h3 class="sub">Weitere Stände</h3>${andere.map(id => `<div class="kv"><span>${esc(standName(id) || id)}</span><b class="num">${eur(x.staende[id].summe)} · ${x.staende[id].bons} Bons</b></div>`).join('')}` : ''}`;
   })
+};
+
+/* ---------- Heute am Stand: das Wichtigste für die Standleitung auf einen Blick ---------- */
+P.heute = {
+  stand: true, key: 'uebersicht',
+  titel: () => standName(),
+  open: () => { if (!leitet()) return 'schichten'; if (rang() >= 3) laden('uebersicht', { aktion: 'uebersicht', stand_id: S.stand_id }); },
+  body: () => {
+    const st = stand(), t = today(), m = nowMin();
+    const sz = (st.standzeiten || []).find(z => z.datum === t);
+    const heute = (D.schichten || []).filter(s => s.stand_id === S.stand_id && s.datum === t && s.status !== 'abgelehnt').sort((a, b) => a.von.localeCompare(b.von));
+    const jetzt = heute.filter(s => s.status === 'geplant' && toMin(s.von) <= m && toMin(s.bis) > m);
+    const bald = heute.filter(s => s.status === 'geplant' && toMin(s.von) > m && toMin(s.von) <= m + 120);
+    const gaps = sz ? luecken(heute.filter(s => s.status === 'geplant'), sz).filter(g => toMin(g[1]) > m) : [];
+    const offen = eigeneHinweise().filter(h => h.stand === st.name);
+    const aus = sortimentFor(st).filter(p => availOf(st.stand_id, p.produkt_id) !== 'verfuegbar');
+    const ck = ((D && D.checklisten) || []).filter(c => c.art === 'stand' && c.ref_id === st.stand_id);
+    const person = s => `<div class="hzeile"><b>${esc(s.name)}</b><span>${esc(s.aufgabe)} · ${s.von}–${s.bis}</span></div>`;
+    const umsatz = rang() >= 3 && L.uebersicht && L.uebersicht.ok ? (L.uebersicht.staende[S.stand_id] || { bons: 0, summe: 0 }) : null;
+    return `${!sz ? '<div class="banner">Heute keine Standzeit</div>' : ''}
+      ${umsatz ? `<div class="stats"><div class="stat"><small>Umsatz heute</small><b class="num">${eur(umsatz.summe)}</b></div><div class="stat"><small>Bons</small><b class="num">${umsatz.bons}</b></div></div>` : ''}
+      ${offen.length ? `<button class="hkarte warn" data-nav data-hz="hinweise"><b>${offen.length}</b><span>zu bestätigen</span>${I.back}</button>` : ''}
+      <h3 class="sub">Jetzt da</h3>${jetzt.map(person).join('') || '<p class="muted" style="margin:0">Niemand</p>'}
+      ${bald.length ? `<h3 class="sub">Gleich</h3>${bald.map(person).join('')}` : ''}
+      ${gaps.length ? `<h3 class="sub">Niemand eingeteilt</h3><div class="vlist">${gaps.map(g => `<span class="pill st">${g[0]}–${g[1]}</span>`).join('')}</div>` : ''}
+      ${aus.length ? `<h3 class="sub">Nicht verfügbar</h3>${aus.map(p => `<div class="hzeile"><b>${esc(p.name)}</b><span>${availOf(st.stand_id, p.produkt_id) === 'nicht_da' ? 'ausgeblendet' : 'ausverkauft'}</span><button class="mini-btn" data-wieder="${esc(p.produkt_id)}">Wieder da</button></div>`).join('')}` : ''}
+      <div class="menu">
+        <button class="item" data-nav data-hz="plan"><span class="ic">${I.cal}</span><span>Personalplanung</span></button>
+        <button class="item" data-nav data-hz="personal"><span class="ic">${I.users}</span><span>Codes & Einladen</span></button>
+        <button class="item" data-nav data-hz="checkliste"><span class="ic">${I.list}</span><span>Checkliste</span>${ck.length ? `<small style="margin-left:auto">${ck.filter(c => c.erledigt).length}/${ck.length}</small>` : ''}</button>
+        <button class="item" data-nav data-hz="standbons"><span class="ic">${I.receipt}</span><span>Bons & Storno</span></button>
+        <button class="item" data-nav data-hz="standedit"><span class="ic">${I.edit}</span><span>Stand einrichten</span></button>
+        ${rang() >= 3 ? `<button class="item" data-nav data-hz="struktur"><span class="ic">${I.pin}</span><span>Märkte & Stände</span></button>` : ''}
+      </div>`;
+  },
+  bind: root => {
+    root.querySelectorAll('[data-hz]').forEach(b => b.addEventListener('click', () => go(b.dataset.hz)));
+    root.querySelectorAll('[data-wieder]').forEach(b => b.addEventListener('click', () => {
+      enqueue('Verfuegbarkeit', { stand_id: S.stand_id, produkt_id: b.dataset.wieder, status: 'verfuegbar', geaendert_am: new Date().toISOString() });
+      render(); toast('Wieder verfügbar');
+    }));
+  }
 };
 
 /* ---------- Personalverwaltung: freischalten und einladen ---------- */
@@ -524,9 +628,9 @@ P.personal = {
       ${!c.entzogen ? `<div class="acts">${ui.confirm === c.code ? `Freischaltung entziehen? <button class="btn danger sm" data-entz="${c.code}">Ja</button><button class="btn ghost sm" data-nein>Nein</button>` : `<button class="mini-btn" data-ask="${c.code}">Entziehen</button>`}
         ${!c.offen ? `<button class="mini-btn" data-plan="${esc(c.benutzer_id)}">In Plan eintragen</button>` : ''}</div>` : ''}</div>`).join(''))}` : ''}
     <h3 class="sub">Neue Person einladen</h3>
-    ${ui.einladung ? `<div class="card"><b>${esc(ui.einladung.name)}</b><span class="muted">Link gilt 24 Stunden · Freigabe danach über die Glocke</span><div class="linkbox">${esc(ui.einladung.url)}</div>
+    ${ui.einladung ? `<div class="card"><b>${esc(ui.einladung.name)}${ui.einladung.gruppe ? ' · ' + esc(ui.einladung.gruppe) : ''}</b><span class="muted">Link gilt 24 Stunden · Freigabe danach über die Glocke</span><div class="linkbox">${esc(ui.einladung.url)}</div>
         <div class="acts"><button class="btn sm" data-teilen>${navigator.share ? 'Link teilen' : 'Link kopieren'}</button><button class="btn ghost sm" data-weitere>Weitere Person</button></div></div>`
-      : `<div class="einlad"><input id="ei-n" placeholder="Name" autocapitalize="words" autocomplete="off" aria-label="Name der Person"><button class="btn sm" data-einladen>Link erstellen</button></div>`}`,
+      : `${rang() >= 4 && GRUPPEN_L().length ? `<div class="field"><select id="ei-g" aria-label="${GRUPPE}">${optionen(GRUPPEN_L().map(g => [g.gruppe_id, g.name]), S.user.gruppe_id)}</select></div>` : ''}<div class="einlad"><input id="ei-n" placeholder="Name" autocapitalize="words" autocomplete="off" aria-label="Name der Person"><button class="btn sm" data-einladen>Link erstellen</button></div>`}`,
   bind: root => {
     const b = root.querySelector('[data-code]');
     if (b) b.addEventListener('click', () => tue(b, async () => {
@@ -541,7 +645,8 @@ P.personal = {
     const e = root.querySelector('[data-einladen]');
     if (e) e.addEventListener('click', () => {
       const name = val(root, '#ei-n').replace(/\s+/g, ' '); if (name.length < 2) return toast('Name fehlt');
-      tue(e, async () => { const r = await call({ aktion: 'einladung_erstellen', name }, true); if (r.ok) { ui.einladung = { name: r.name, url: location.origin + location.pathname + '?e=' + r.token }; render(); } });
+      const gruppe_id = val(root, '#ei-g') || undefined;
+      tue(e, async () => { const r = await call({ aktion: 'einladung_erstellen', name, gruppe_id }, true); if (r.ok) { ui.einladung = { name: r.name, url: location.origin + location.pathname + '?e=' + r.token, gruppe: gruppeName(gruppe_id || S.user.gruppe_id) }; render(); } });
     });
     const w = root.querySelector('[data-weitere]'); if (w) w.addEventListener('click', () => { ui.einladung = null; render(); });
     const t = root.querySelector('[data-teilen]');
@@ -561,7 +666,7 @@ P.standbons = {
   open: () => { ui.bonsTag = ui.bonsTag || today(); if (L.standbons && L.standbons.datum !== ui.bonsTag) L.standbons = null; standBonsLaden(); },
   body: () => `<div class="field"><input type="date" id="bt" value="${esc(ui.bonsTag)}" aria-label="Tag"></div>` + geladen('standbons', x => {
     const ok = x.bons.filter(b => b.status === 'ok');
-    return `<div class="stats"><div class="stat"><small>Umsatz</small><b class="num">${eur(ok.reduce((a, b) => a + b.summe, 0))}</b></div><div class="stat"><small>Bons</small><b class="num">${ok.length}</b></div></div>` +
+    return `<div class="stats">${rang() >= 3 ? `<div class="stat"><small>Umsatz</small><b class="num">${eur(ok.reduce((a, b) => a + b.summe, 0))}</b></div>` : ''}<div class="stat"><small>Bons</small><b class="num">${ok.length}</b></div></div>` +
       (x.bons.length ? x.bons.map(b => bonKarte(b, b.status === 'ok', b.name + (b.hinweis ? ' · ' + b.hinweis + (b.bestaetigt ? ' ✓' : '') : ''))).join('') : listeLeer('Keine Bons'));
   }),
   bind: root => {
@@ -587,25 +692,48 @@ P.nachtrag = {
 
 /* ---------- Rückmeldung, Anzeige, Abgleich ---------- */
 P.feedback = {
-  form: true,
+  form: true, verwerfen: () => { ui.fb = null; },
   titel: 'Rückmeldung',
-  body: () => `<div class="field"><label>Art</label><div class="seg" id="fb-typ">${['Problem', 'Idee', 'Kommentar'].map((t, i) => `<button data-t="${t}" aria-pressed="${i === 0}">${t}</button>`).join('')}</div></div>
-    <div class="field"><label for="fb-text">Text</label><textarea id="fb-text" rows="6"></textarea></div>`,
+  open: () => { ui.fb = ui.fb || { typ: 'Problem', text: '', bild: null }; },
+  body: () => { const f = ui.fb; return `<div class="field"><label>Art</label><div class="seg" id="fb-typ">${['Problem', 'Idee', 'Kommentar'].map(t => `<button data-t="${t}" aria-pressed="${f.typ === t}">${t}</button>`).join('')}</div></div>
+    <div class="field"><label for="fb-text">Text</label><textarea id="fb-text" class="fest" rows="6" autocomplete="off">${esc(f.text)}</textarea></div>
+    <div class="field"><label>Foto</label><div class="imgedit">${f.bild ? `<img src="${f.bild}" alt=""><button class="mini-btn" data-fbx>Entfernen</button>` : '<span class="ph">kein Foto</span>'}<label class="mini-btn">${f.bild ? 'Anderes' : 'Foto'}<input type="file" accept="image/*" id="fb-bild" hidden></label></div></div>`; },
   leiste: () => '<button class="btn wide" data-send>Senden</button>',
   bind: root => {
-    root.querySelectorAll('#fb-typ button').forEach(b => b.addEventListener('click', () => root.querySelectorAll('#fb-typ button').forEach(x => x.setAttribute('aria-pressed', x === b))));
+    const f = ui.fb, ta = root.querySelector('#fb-text');
+    ta.addEventListener('input', () => { f.text = ta.value; });
+    root.querySelectorAll('#fb-typ button').forEach(b => b.addEventListener('click', () => { f.typ = b.dataset.t; root.querySelectorAll('#fb-typ button').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
+    root.querySelector('#fb-bild').addEventListener('change', async e => {
+      const d = e.target.files[0]; if (!d) return;
+      try { f.bild = await bildVerkleinern(d, 1280, 1280, false); } catch (x) { toast('Foto nicht lesbar'); }
+      render();
+    });
+    const x = root.querySelector('[data-fbx]'); if (x) x.addEventListener('click', () => { f.bild = null; render(); });
     root.querySelector('[data-send]').addEventListener('click', () => {
-      const text = root.querySelector('#fb-text').value.trim(); if (!text) return toast('Text fehlt');
-      enqueue('Rueckmeldung', { rm_id: uid(), zeit: new Date().toISOString(), benutzer_id: S.user.benutzer_id, stand_id: S.stand_id || '', typ: root.querySelector('#fb-typ [aria-pressed="true"]').dataset.t, text, geraet_info: navigator.userAgent.slice(0, 120) });
-      home(); toast('Gesendet');
+      f.text = ta.value.trim(); if (!f.text) return toast('Text fehlt');
+      enqueue('Rueckmeldung', { rm_id: uid(), zeit: jetzt().toISOString(), benutzer_id: S.user.benutzer_id, stand_id: S.stand_id || '', typ: f.typ, text: f.text, geraet_info: navigator.userAgent.slice(0, 120), bild: f.bild ? f.bild.split(',')[1] : '' });
+      ui.fb = null; ui.dirty = false; home(); toast('Gesendet');
     });
   }
 };
+/* Anzeige: Schrift und Kacheln getrennt, mit Vorschau */
 P.anzeige = {
   titel: 'Anzeige',
-  body: () => `<div class="field"><label>Größe der Kacheln und Schrift</label><div class="seg big">${[[1, 'Normal'], [2, 'Groß'], [3, 'Sehr groß']].map(([v, l]) => `<button data-gr="${v}" aria-pressed="${(S.anzeige || 1) === v}">${l}</button>`).join('')}</div></div>
-    <p class="muted">Gilt nur auf diesem Gerät.</p>`,
-  bind: root => root.querySelectorAll('[data-gr]').forEach(b => b.addEventListener('click', () => { S.anzeige = +b.dataset.gr; render(); }))
+  body: () => {
+    const p = sortimentFor(stand()).slice(0, 3);
+    const muster = p.length ? p : PRODS().slice(0, 3);
+    return `<div class="field"><label>Schrift</label><div class="seg big">${[[1, 'Normal'], [2, 'Groß'], [3, 'Sehr groß']].map(([v, l]) => `<button data-sch="${v}" aria-pressed="${(S.schrift || 1) === v}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label>Kacheln</label><div class="seg big">${[[1, 'Klein'], [2, 'Normal'], [3, 'Groß']].map(([v, l]) => `<button data-ka="${v}" aria-pressed="${(S.kachel || 2) === v}">${l}</button>`).join('')}</div></div>
+      <h3 class="sub">Vorschau</h3>
+      <div class="vorschau"><div class="grid">${muster.map(x => `<div class="cell"><div class="tile"><span class="pic" style="background:${esc(kat(x.kategorie).farbe || '#5E6A61')}">${x.bild && imgUrl('bilder', x.bild) ? `<img src="${imgUrl('bilder', x.bild)}" alt="">` : esc(initials(x.name))}</span><span class="tx"><span class="nm">${esc(x.name)}</span><span class="pr num">${eur(preis(x))}</span></span></div></div>`).join('')}</div>
+        <div class="bar"><div class="sum"><small>3 Artikel</small><b class="num">${eur(muster.reduce((a, x) => a + preis(x), 0))}</b></div><span class="btn">Kassieren</span></div></div>
+      ${installMoeglich() ? '<button class="btn ghost wide" data-inst>Auf den Startbildschirm</button>' : ''}`;
+  },
+  bind: root => {
+    root.querySelectorAll('[data-sch]').forEach(b => b.addEventListener('click', () => { S.schrift = +b.dataset.sch; render(); }));
+    root.querySelectorAll('[data-ka]').forEach(b => b.addEventListener('click', () => { S.kachel = +b.dataset.ka; render(); }));
+    const i = root.querySelector('[data-inst]'); if (i) i.addEventListener('click', () => go('install'));
+  }
 };
 P.abgleich = {
   titel: 'Abgleich',

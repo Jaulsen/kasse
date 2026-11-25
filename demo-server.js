@@ -1,6 +1,6 @@
 /* Demo-Modus: die echte Schnittstelle (Code.gs) läuft im Browser auf einem nachgebildeten Google Sheet. */
 (function () {
-  const KEY = 'wmk-demo-sheet-v2';
+  const KEY = 'wmk-demo-sheet-v25';
   const iso = d => new Date(d).toLocaleDateString('sv-SE');
   const heute = iso(Date.now()), morgen = iso(Date.now() + 864e5);
   const fmt = (d, o) => new Intl.DateTimeFormat('de-DE', Object.assign({ timeZone: 'Europe/Berlin' }, o)).format(d);
@@ -9,14 +9,15 @@
     const sd = window.KASSE_DEMO.stammdaten;
     const zeit = heute + ' 08:00-22:00; ' + morgen + ' 10:00-20:00';
     const T = {
-      'Einstellungen': [['schluessel', 'wert', 'erklaerung'], ['app_titel', 'Weihnachtsmarkt-Kasse', ''], ['verein', 'Pfadfinderbund Süd', ''], ['schnellbetraege', '5;10;20;50', ''], ['storno_anzahl', 2, ''], ['abgleich_sekunden', 60, ''], ['bilder_ordner_id', 'FB', ''], ['info_ordner_id', 'FI', ''], ['aufgaben', 'Standleitung;Kasse;Waffeln;Punsch;Fritteuse', '']],
+      'Einstellungen': [['schluessel', 'wert', 'erklaerung'], ['app_titel', 'Weihnachtsmarkt-Kasse', ''], ['verein', 'Pfadfinderbund Süd', ''], ['schnellbetraege', '0,5;1;2;5;10;20;50', ''], ['storno_anzahl', 2, ''], ['abgleich_sekunden', 60, ''], ['bilder_ordner_id', 'FB', ''], ['info_ordner_id', 'FI', ''], ['aufgaben', 'Standleitung;Kasse;Waffeln;Punsch;Fritteuse', '']],
       'Kategorien': [['kategorie', 'sortierung', 'farbe', 'preis_je_markt', 'notiz']].concat(sd.kategorien.map(k => [k.kategorie, k.sortierung, k.farbe, k.kategorie === 'Pfand' ? 'JA' : 'NEIN', ''])),
       'Produkte': [['produkt_id', 'name', 'kategorie', 'preis', 'bild', 'sortierung', 'aktiv', 'beschreibung', 'info_dateien', 'vorgeschlagen_von', 'notiz']]
         .concat(sd.produkte.map(p => [p.produkt_id, p.name, p.kategorie, p.preis / 100, p.bild, p.sortierung, 'JA', p.beschreibung || '', (p.info || []).map(i => i.name).join(';'), '', ''])),
-      'Märkte': [['markt_id', 'name', 'ort', 'datum_von', 'datum_bis', 'archiviert', 'notiz'], ['MK001', 'WM Musterstadt', 'Marktplatz', heute, morgen, 'NEIN', ''], ['MK002', 'Adventsbasar', 'Gemeindehaus', morgen, morgen, 'NEIN', '']],
+      'Gruppen': [['gruppe_id', 'name', 'sortierung'], ['G001', 'Stamm Adler', 10], ['G002', 'Stamm Biber', 20]],
+      'Märkte': [['markt_id', 'name', 'ort', 'datum_von', 'datum_bis', 'archiviert', 'notiz', 'gruppe_id'], ['MK001', 'WM Musterstadt', 'Marktplatz', heute, morgen, 'NEIN', '', 'G001'], ['MK002', 'Adventsbasar', 'Gemeindehaus', morgen, morgen, 'NEIN', '', 'G002']],
       'Stände': [['stand_id', 'markt_id', 'name', 'kategorien', 'standzeiten', 'archiviert', 'notiz'], ['S001', 'MK001', 'Holzstand', 'Holzwerk;Deko', zeit, 'NEIN', ''], ['S002', 'MK001', 'Café', 'Gebäck;Getränke;Pfand', zeit, 'NEIN', ''], ['S003', 'MK002', 'Basar', 'ALLE', morgen + ' 14:00-18:00', 'NEIN', '']],
-      'Benutzer': [['benutzer_id', 'name', 'registriert_am', 'geraet_id', 'rolle', 'aktiv', 'pin_hash', 'pin_fehler', 'pin_gesperrt_bis', 'eingeladen_von'],
-        ['u-fritz', 'Fritz', new Date(), '', 'Admin', 'JA', '', 0, '', ''], ['u-anna', 'Anna', new Date(), '', 'Standleitung', 'JA', '', 0, '', ''], ['u-ben', 'Ben', new Date(), '', 'Helfer', 'JA', '', 0, '', ''], ['u-tom', 'Tom', new Date(), 'x', 'Helfer', 'WARTET', '', 0, '', '']],
+      'Benutzer': [['benutzer_id', 'name', 'registriert_am', 'geraet_id', 'rolle', 'aktiv', 'pin_hash', 'pin_fehler', 'pin_gesperrt_bis', 'eingeladen_von', 'entfernt', 'gruppe_id'],
+        ['u-fritz', 'Fritz', new Date(), '', 'Admin', 'JA', '', 0, '', '', '', 'G001'], ['u-anna', 'Anna', new Date(), '', 'Standleitung', 'JA', '', 0, '', '', '', 'G001'], ['u-ben', 'Ben', new Date(), '', 'Helfer', 'JA', '', 0, '', '', '', 'G001'], ['u-tom', 'Tom', new Date(), 'x', 'Helfer', 'WARTET', '', 0, '', 'u-anna', '', 'G001']],
       'Zuständigkeiten': [['art', 'ref_id', 'benutzer_id', 'erstellt_von', 'erstellt_am'], ['stand', 'S002', 'u-anna', '', new Date()]],
       'Schichten': [['schicht_id', 'stand_id', 'datum', 'von', 'bis', 'aufgabe', 'benutzer_id', 'platzhalter', 'status', 'erstellt_von'],
         ['sch1', 'S002', heute, '10:00', '14:00', 'Standleitung', 'u-anna', '', 'geplant', ''], ['sch2', 'S002', heute, '10:00', '16:00', 'Kasse', 'u-ben', '', 'geplant', ''],
@@ -36,9 +37,11 @@
     getValues() { const o = []; for (let i = 0; i < this.nr; i++) { const row = this.sh.d()[this.r - 1 + i] || []; o.push(Array.from({ length: this.nc }, (_, j) => row[this.c - 1 + j] == null ? '' : row[this.c - 1 + j])); } return o; }
     setValues(v) { const d = this.sh.d(); v.forEach((row, i) => { const R = this.r - 1 + i; d[R] = d[R] || []; row.forEach((x, j) => { d[R][this.c - 1 + j] = norm(x); }); }); }
     setValue(x) { this.setValues([[x]]); }
+    clearContent() { const d = this.sh.d(); for (let i = 0; i < this.nr; i++) { const row = d[this.r - 1 + i]; if (row) for (let j = 0; j < this.nc; j++) row[this.c - 1 + j] = ''; } }
   }
   class Sheet {
     constructor(n) { this.n = n; }
+    getName() { return this.n; }
     d() { return store[this.n]; }
     setName(nn) { store[nn] = store[this.n]; delete store[this.n]; this.n = nn; }
     getLastColumn() { return Math.max(0, ...this.d().map(r => { let l = 0; (r || []).forEach((v, i) => { if (v !== '' && v != null) l = i + 1; }); return l; })); }
@@ -80,10 +83,12 @@
     out.FI['Pflegeanleitung.pdf'] = 'pdf';
     return out;
   };
-  window.SpreadsheetApp = { getActive: () => ({ getSheetByName: n => store[n] ? new Sheet(n) : null, insertSheet: n => { store[n] = []; return new Sheet(n); } }), flush() {} };
+  const kopie = () => { const snap = JSON.parse(JSON.stringify(store)); return { getUrl: () => location.href, getSheetByName: n => snap[n] ? { getLastRow: () => snap[n].filter(r => r && r.some(v => v !== '' && v != null)).length } : null }; };
+  window.SpreadsheetApp = { getActive: () => ({ getName: () => 'Demo', copy: kopie, getSheetByName: n => store[n] ? new Sheet(n) : null, insertSheet: n => { store[n] = []; return new Sheet(n); }, deleteSheet: sh => { delete store[sh.n]; } }), flush() {} };
   window.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: s => ({ setMimeType: () => s }) };
-  window.LockService = { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) };
-  window.CacheService = { getScriptCache: () => ({ get: () => null, put() {}, remove() {} }) };
+  window.LockService = { getScriptLock: () => ({ waitLock() {}, tryLock() { return true; }, releaseLock() {} }) };
+  const cacheMem = {};
+  window.CacheService = { getScriptCache: () => ({ get: k => (k === 'datenstand' && cacheMem[k]) || null, put: (k, v) => { if (k === 'datenstand') cacheMem[k] = v; }, remove: k => { delete cacheMem[k]; } }) };
   window.MailApp = { sendEmail() {} };
   window.Utilities = {
     DigestAlgorithm: { SHA_256: 's', MD5: 'm' }, Charset: { UTF_8: 'u' },
@@ -99,6 +104,7 @@
   window.DriveApp = {
     Access: { ANYONE_WITH_LINK: 1 }, Permission: { VIEW: 1 },
     createFolder: () => ({ getId: () => 'FB' }),
+    getFileById: n => ({ getBlob: () => { const u = String(window.KASSE_DEMO.bilder[n] || ''); return { getContentType: () => 'image/jpeg', getBytes: () => u.split(',')[1] || '' }; } }),
     getFolderById: id => ({
       createFile: b => { window.KASSE_DEMO.bilder[b.name] = b.mime === 'application/pdf' ? 'pdf' : 'data:' + b.mime + ';base64,' + b.bytes; return { setSharing() {} }; },
       getFiles: () => { const l = Object.keys(demoFiles()[id] || {}); return { hasNext: () => l.length > 0, next: () => { const n = l.shift(); return { getName: () => n, getId: () => n, getMimeType: () => /\.pdf$/.test(n) ? 'application/pdf' : 'image/jpeg', getLastUpdated: () => new Date(1) }; } }; }

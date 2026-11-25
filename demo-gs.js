@@ -2,40 +2,45 @@
 window.__GS = (function () {
 /**
  * Weihnachtsmarkt-Kasse – Google-Schnittstelle
- * Version 2.4 · 2026-11-25
+ * Version 2.5 · 2026-11-26
  *
  * Gehört in das Apps-Script-Projekt am Google Sheet (Erweiterungen › Apps Script).
  * Fehlende Tabs und Spalten legt die Schnittstelle selbst an; ein Sheet aus
  * Version 1.x wird beim ersten Aufruf automatisch umgestellt (Märkte › Stände).
  */
 
-const VERSION = '2.4';
+const VERSION = '2.5';
 const TZ = 'Europe/Berlin';
 const MAX_DATEI_BYTES = 350000;
 const PUFFER_MIN = 30;
 const RANG = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
+const EGAL = 'Egal';
 
 const TABS = {
   'Einstellungen': ['schluessel', 'wert', 'erklaerung'],
+  'Gruppen': ['gruppe_id', 'name', 'sortierung'],
   'Kategorien': ['kategorie', 'sortierung', 'farbe', 'preis_je_markt', 'notiz'],
-  'Produkte': ['produkt_id', 'name', 'kategorie', 'preis', 'bild', 'sortierung', 'aktiv', 'beschreibung', 'info_dateien', 'vorgeschlagen_von', 'notiz', 'verantwortlich_id', 'verantwortlich_platzhalter', 'offen_bild', 'offen_beschreibung', 'offen_info', 'offen_von', 'offen_am'],
-  'Märkte': ['markt_id', 'name', 'ort', 'datum_von', 'datum_bis', 'archiviert', 'notiz'],
+  'Produkte': ['produkt_id', 'name', 'kategorie', 'preis', 'bild', 'sortierung', 'aktiv', 'beschreibung', 'info_dateien', 'vorgeschlagen_von', 'notiz', 'verantwortlich_id', 'verantwortlich_platzhalter', 'offen_bild', 'offen_beschreibung', 'offen_info', 'offen_von', 'offen_am', 'pfand_id'],
+  'Märkte': ['markt_id', 'name', 'ort', 'datum_von', 'datum_bis', 'archiviert', 'notiz', 'gruppe_id'],
   'Stände': ['stand_id', 'markt_id', 'name', 'kategorien', 'standzeiten', 'archiviert', 'notiz'],
   'Zuständigkeiten': ['art', 'ref_id', 'benutzer_id', 'verantwortlich', 'erstellt_von', 'erstellt_am'],
   'Preise': ['markt_id', 'produkt_id', 'preis', 'geaendert_von', 'geaendert_am'],
-  'Benutzer': ['benutzer_id', 'name', 'registriert_am', 'geraet_id', 'rolle', 'aktiv', 'pin_hash', 'pin_fehler', 'pin_gesperrt_bis', 'eingeladen_von', 'entfernt'],
-  'Einladungen': ['token', 'name', 'erstellt_von', 'erstellt_am', 'gueltig_bis', 'eingeloest_von'],
+  'Benutzer': ['benutzer_id', 'name', 'registriert_am', 'geraet_id', 'rolle', 'aktiv', 'pin_hash', 'pin_fehler', 'pin_gesperrt_bis', 'eingeladen_von', 'entfernt', 'gruppe_id', 'geraet_alt', 'geraet_seit'],
+  'Einladungen': ['token', 'name', 'erstellt_von', 'erstellt_am', 'gueltig_bis', 'eingeloest_von', 'gruppe_id'],
   'Schichten': ['schicht_id', 'stand_id', 'datum', 'von', 'bis', 'aufgabe', 'benutzer_id', 'platzhalter', 'status', 'erstellt_von', 'ersetzt', 'anfrage'],
   'Verfügbarkeit': ['stand_id', 'produkt_id', 'status', 'geaendert_von', 'geaendert_am', 'geprueft'],
   'Zugangscodes': ['code', 'stand_id', 'datum', 'erstellt_von', 'erstellt_am', 'eingeloest_von', 'geraet_id', 'eingeloest_am', 'entzogen_am', 'entzogen_von'],
   'Verkäufe': ['bon_id', 'zeit', 'stand_id', 'benutzer_id', 'geraet_id', 'anzahl_artikel', 'summe', 'gegeben', 'rueckgeld', 'status', 'art', 'empfangen_am', 'hinweis', 'bestaetigt_von', 'bestaetigt_am'],
   'Positionen': ['bon_id', 'pos_nr', 'zeit', 'stand_id', 'benutzer_id', 'produkt_id', 'produktname', 'kategorie', 'einzelpreis', 'menge', 'zeilensumme', 'status'],
-  'Rückmeldungen': ['rm_id', 'zeit', 'benutzer_id', 'stand_id', 'typ', 'text', 'geraet_info', 'status', 'notiz'],
+  'Rückmeldungen': ['rm_id', 'zeit', 'benutzer_id', 'stand_id', 'typ', 'text', 'geraet_info', 'status', 'notiz', 'bild'],
   'Nachrichten': ['nachricht_id', 'an', 'titel', 'text', 'von', 'am', 'gelesen_am'],
   'Vorschläge': ['vorschlag_id', 'art', 'ref_id', 'daten', 'von', 'an', 'am', 'status'],
   'Checklisten': ['punkt_id', 'art', 'ref_id', 'text', 'zustaendig_id', 'platzhalter', 'faellig', 'sortierung', 'erledigt_von', 'erledigt_am'],
-  'Vorlagen': ['vorlage_id', 'name', 'typ', 'besitzer', 'basis_id', 'punkte', 'geaendert_am']
+  'Vorlagen': ['vorlage_id', 'name', 'typ', 'besitzer', 'basis_id', 'punkte', 'geaendert_am', 'gruppe_id'],
+  'Lasttest': ['zeit', 'nr', 'daten']
 };
+/* Tabellen, deren Änderung die Stammdaten der Geräte nicht berührt (kein neuer Datenstand) */
+const OHNE_DATENSTAND = ['Positionen', 'Verkäufe', 'Einladungen', 'Lasttest'];
 
 /* ===================================================================
    Einstieg
@@ -65,20 +70,44 @@ const AKTIONEN = {
   bons_liste: bonsListe_,
   benutzer_loeschen: benutzerLoeschen_, nachricht_senden: nachrichtSenden_, nachricht_gelesen: nachrichtGelesen_,
   verantwortung: verantwortung_, checkpunkt_speichern: checkpunktSpeichern_, checkpunkt_loeschen: checkpunktLoeschen_, checkpunkt_haken: checkpunktHaken_,
-  vorlage_speichern: vorlageSpeichern_, vorlage_loeschen: vorlageLoeschen_, vorlage_anwenden: vorlageAnwenden_, markt_kopieren: marktKopieren_
+  vorlage_speichern: vorlageSpeichern_, vorlage_loeschen: vorlageLoeschen_, vorlage_anwenden: vorlageAnwenden_, markt_kopieren: marktKopieren_,
+  gruppe_speichern: gruppeSpeichern_, gruppe_loeschen: gruppeLoeschen_, gruppe_waehlen: gruppeWaehlen_, plan_kopieren: planKopieren_,
+  rm_bild: rmBild_, lasttest: lasttest_, saison_abschliessen: saisonAbschliessen_
 };
 
 function verarbeite_(p) {
+  geschrieben_ = false;
+  Object.keys(cache_).forEach(function (k) { delete cache_[k]; });
   try {
     migrieren_();
     const f = AKTIONEN[p.aktion];
     if (!f) return { ok: false, fehler: 'Unbekannte Aktion: ' + p.aktion };
-    return f(p);
+    const r = f(p);
+    if (geschrieben_) neuerDatenstand_();
+    if (r && r.ok && (p.aktion === 'sync' || p.aktion === 'stammdaten')) { r.v = r.v || datenstand_(); r.zeit = new Date().toISOString(); }
+    return r;
   } catch (err) {
+    if (geschrieben_) neuerDatenstand_();
     console.error(err && err.stack || err);
     return { ok: false, fehler: String((err && err.message) || err) };
   }
 }
+
+/* Datenstand: ändert sich bei jeder Änderung, die die Geräte sehen müssen.
+   Geräte mit aktuellem Datenstand bekommen nur eine kurze Antwort. */
+let geschrieben_ = false;
+function datenstand_() {
+  const c = CacheService.getScriptCache();
+  let v = c.get('datenstand');
+  if (!v) { v = Utilities.getUuid().slice(0, 8); c.put('datenstand', v, 21600); }
+  return v + '|' + heute_();
+}
+function neuerDatenstand_() {
+  try { SpreadsheetApp.flush(); } catch (e) { }
+  CacheService.getScriptCache().put('datenstand', Utilities.getUuid().slice(0, 8), 21600);
+  geschrieben_ = false;
+}
+function merke_(t) { if (OHNE_DATENSTAND.indexOf(t.name) < 0) geschrieben_ = true; }
 
 function antwort_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
@@ -90,7 +119,7 @@ function antwort_(obj) {
 const cache_ = {};
 
 function tab_(name) {
-  if (cache_[name]) return cache_[name];
+  if (cache_[name] && cache_[name].zeilen) return cache_[name];
   const ss = SpreadsheetApp.getActive();
   let sh = ss.getSheetByName(name);
   if (!sh) {
@@ -106,10 +135,33 @@ function tab_(name) {
     kopf.forEach(function (h, j) { if (h) o[h] = w[j]; });
     zeilen.push(o);
   });
-  const t = { sh: sh, kopf: kopf, zeilen: zeilen, letzte: Math.max(sh.getLastRow(), 1) };
+  const t = Object.assign(cache_[name] || {}, { name: name, sh: sh, kopf: kopf, zeilen: zeilen, letzte: Math.max(sh.getLastRow(), 1) });
   cache_[name] = t;
   (TABS[name] || []).forEach(function (c) { spalteSicherstellen_(t, c); });
   return t;
+}
+
+/* Nur Kopfzeile und Zeilenzahl: für große Tabellen (Verkäufe, Positionen), ohne alle Zeilen zu lesen */
+function kopf_(name) {
+  if (cache_[name]) return cache_[name];
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); sh.getRange(1, 1, 1, TABS[name].length).setValues([TABS[name]]); }
+  const breite = Math.max(sh.getLastColumn(), 1);
+  const kopf = sh.getRange(1, 1, 1, breite).getValues()[0].map(function (h) { return String(h).trim(); });
+  const t = { name: name, sh: sh, kopf: kopf, zeilen: null, letzte: Math.max(sh.getLastRow(), 1) };
+  cache_[name] = t;
+  (TABS[name] || []).forEach(function (c) { spalteSicherstellen_(t, c); });
+  return t;
+}
+/* Einzelne Spalten einer großen Tabelle lesen: [{ _zeile, spalte: wert, … }] */
+function spaltenLesen_(t, namen, abZeile) {
+  const von = Math.max(2, abZeile || 2), n = t.letzte - von + 1;
+  if (n <= 0) return [];
+  const sp = namen.map(function (x) { return t.sh.getRange(von, spalte_(t, x), n, 1).getValues(); });
+  const out = [];
+  for (let i = 0; i < n; i++) { const o = { _zeile: von + i }; namen.forEach(function (x, j) { o[x] = sp[j][i][0]; }); out.push(o); }
+  return out;
 }
 
 function spalteSicherstellen_(t, name) {
@@ -122,22 +174,33 @@ function spalteSicherstellen_(t, name) {
 
 function spalte_(t, name) { spalteSicherstellen_(t, name); return t.kopf.indexOf(name) + 1; }
 
+/* Texte, die Google Sheets als Formel lesen würde, als reinen Text speichern */
+function zelle_(v) {
+  if (v === undefined || v === null) return '';
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(v) && !/^-?\d+([.,]\d+)?$/.test(v)) return "'" + v;
+  return v;
+}
+const ohneStrich_ = function (v) { return typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v; };
+
 function anhaengen_(t, objekte) {
   if (!objekte.length) return [];
   const start = t.letzte + 1;
-  const werte = objekte.map(function (o) { return t.kopf.map(function (h) { return o[h] === undefined || o[h] === null ? '' : o[h]; }); });
+  const werte = objekte.map(function (o) { return t.kopf.map(function (h) { return zelle_(o[h]); }); });
   t.sh.getRange(start, 1, werte.length, t.kopf.length).setValues(werte);
   t.letzte = start + werte.length - 1;
+  merke_(t);
   return objekte.map(function (o, i) {
     const z = Object.assign({ _zeile: start + i }, o);
-    Object.keys(z).forEach(function (k) { if (typeof z[k] === 'string' && z[k].charAt(0) === "'") z[k] = z[k].slice(1); });
-    t.zeilen.push(z); return z;
+    Object.keys(z).forEach(function (k) { z[k] = ohneStrich_(z[k]); });
+    if (t.zeilen) t.zeilen.push(z);
+    return z;
   });
 }
 
 function setzen_(t, zeile, spaltenname, wert) {
-  t.sh.getRange(zeile._zeile, spalte_(t, spaltenname)).setValue(wert);
-  zeile[spaltenname] = typeof wert === 'string' && wert.charAt(0) === "'" ? wert.slice(1) : wert;
+  t.sh.getRange(zeile._zeile, spalte_(t, spaltenname)).setValue(zelle_(wert));
+  zeile[spaltenname] = ohneStrich_(wert);
+  merke_(t);
 }
 
 function loeschen_(t, zeile) {
@@ -145,6 +208,7 @@ function loeschen_(t, zeile) {
   t.zeilen = t.zeilen.filter(function (z) { return z !== zeile; });
   t.zeilen.forEach(function (z) { if (z._zeile > zeile._zeile) z._zeile--; });
   t.letzte--;
+  merke_(t);
 }
 
 const txt_ = function (v) { return v === null || v === undefined ? '' : String(v).trim(); };
@@ -159,6 +223,11 @@ function cent_(v) {
   return isNaN(n) ? 0 : Math.round(n * 100);
 }
 const euro_ = function (cent) { return Math.round(Number(cent) || 0) / 100; };
+/* Schnelltasten in Euro, auch mit Cent (0,50) */
+function betraege_(v) {
+  return txt_(v || '0,5;1;2;5;10;20;50').split(';').map(function (x) { return Math.round(parseFloat(txt_(x).replace(',', '.')) * 100) / 100; })
+    .filter(function (n) { return n > 0; }).sort(function (a, c) { return a - c; });
+}
 function tag_(v) {
   if (!v) return '';
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())) return v.trim();
@@ -184,9 +253,11 @@ let sperreTiefe_ = 0;
 function sperre_(fn) {
   if (sperreTiefe_) return fn();
   const lock = LockService.getScriptLock();
-  lock.waitLock(25000);
+  if (!lock.tryLock(20000)) throw new Error('Schnittstelle ausgelastet. Bitte gleich nochmal.');
   sperreTiefe_++;
-  try { return fn(); } finally { sperreTiefe_--; lock.releaseLock(); }
+  // Tabellen in der Sperre frisch lesen: andere Aufrufe können inzwischen geschrieben haben
+  Object.keys(cache_).forEach(function (k) { delete cache_[k]; });
+  try { const r = fn(); SpreadsheetApp.flush(); return r; } finally { sperreTiefe_--; lock.releaseLock(); }
 }
 
 /* ===================================================================
@@ -229,7 +300,7 @@ function migrieren_() {
 }
 /* 2.4: jeder Stand und Markt bekommt Verantwortliche (bisherige Leitung, sonst der erste Admin) */
 function migrieren24_() {
-  if (Number(einstellungen_().schema) >= 24) return;
+  if (Number(einstellungen_().schema) >= 24) return migrieren25_();
   sperre_(function () {
     if (Number(einstellungen_().schema) >= 24) return;
     const zt = tab_('Zuständigkeiten');
@@ -243,6 +314,17 @@ function migrieren24_() {
     tab_('Stände').zeilen.forEach(function (z) { if (txt_(z.stand_id)) einrichten('stand', txt_(z.stand_id)); });
     tab_('Märkte').zeilen.forEach(function (z) { if (txt_(z.markt_id)) einrichten('markt', txt_(z.markt_id)); });
     if (admin || !tab_('Stände').zeilen.length) einstellungSetzen_('schema', 24);
+  });
+  migrieren25_();
+}
+
+/* 2.5: alle Tabellen einmal in der Sperre anlegen (nicht gleichzeitig von mehreren Aufrufen) */
+function migrieren25_() {
+  if (Number(einstellungen_().schema) !== 24) return;
+  sperre_(function () {
+    if (Number(einstellungen_().schema) !== 24) return;
+    Object.keys(TABS).filter(function (n) { return n !== 'Lasttest'; }).forEach(function (n) { if (!SpreadsheetApp.getActive().getSheetByName(n)) tab_(n); });
+    einstellungSetzen_('schema', 25);
   });
 }
 
@@ -280,21 +362,32 @@ const rolle_ = function (b) { return b ? (RANG[txt_(b.rolle)] ? txt_(b.rolle) : 
 const rang_ = function (b) { return b ? RANG[rolle_(b)] : 0; };
 const status_ = function (b) { const a = txt_(b.aktiv).toUpperCase(); return a === 'WARTET' ? 'wartet' : a === 'NEIN' ? 'gesperrt' : 'aktiv'; };
 function benutzerInfo_(z) {
-  return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), status: status_(z), aktiv: status_(z) === 'aktiv', geraet_id: txt_(z.geraet_id) };
+  return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), status: status_(z), aktiv: status_(z) === 'aktiv', geraet_id: txt_(z.geraet_id), gruppe_id: txt_(z.gruppe_id) };
 }
 function pinHash_(id, pin) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, id + ':' + pin, Utilities.Charset.UTF_8)
     .map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
 }
 
-/* angemeldete, freigegebene Person auf ihrem Gerät */
+/* angemeldete, freigegebene Person auf ihrem Gerät (Geräte-ID ist Pflicht) */
 function auth_(p, minRang) {
   const b = benutzer_(p.benutzer_id);
   if (!b) throw new Error('NICHT_ANGEMELDET');
-  if (p.geraet_id && txt_(b.geraet_id) && txt_(b.geraet_id) !== txt_(p.geraet_id)) throw new Error('NICHT_ANGEMELDET');
+  if (txt_(b.geraet_id) && txt_(b.geraet_id) !== txt_(p.geraet_id)) throw new Error('NICHT_ANGEMELDET');
   if (status_(b) !== 'aktiv') throw new Error(status_(b) === 'wartet' ? 'Konto wartet auf Freigabe.' : 'Zugang gesperrt.');
   if (minRang && rang_(b) < minRang) throw new Error('Keine Berechtigung.');
   return b;
+}
+/* Eintrag aus der Warteschlange eines Geräts: gehört er zur Person auf diesem Gerät?
+   Einträge, die vor einem Gerätewechsel entstanden sind, gelten weiter. */
+function eintragPerson_(benutzerId, geraetId, t) {
+  const b = benutzer_(benutzerId);
+  if (!b) return null;
+  const g = txt_(geraetId), jetzt = txt_(b.geraet_id);
+  if (!jetzt || jetzt === g) return b;
+  const seit = b.geraet_seit ? new Date(b.geraet_seit).getTime() : 0;
+  if (g && txt_(b.geraet_alt) === g && Number(t) > 0 && Number(t) <= seit) return b;
+  return null;
 }
 
 function stand_(id) { return tab_('Stände').zeilen.filter(function (z) { return txt_(z.stand_id) === txt_(id); })[0] || null; }
@@ -303,13 +396,24 @@ function zustaendig_(b, art, ref) {
   const id = txt_(b.benutzer_id);
   return tab_('Zuständigkeiten').zeilen.some(function (z) { return txt_(z.art) === art && txt_(z.ref_id) === txt_(ref) && txt_(z.benutzer_id) === id; });
 }
-function marktRecht_(b, marktId) { return rang_(b) >= 3; }
+/* Gruppierungen (Stämme): Märkte gehören einer Gruppe; ohne Gruppe sehen sie alle */
+function gruppeMarkt_(marktId) { const m = markt_(marktId); return m ? txt_(m.gruppe_id) : ''; }
+function gruppeStand_(standId) { const s = stand_(standId); return s ? gruppeMarkt_(s.markt_id) : ''; }
+function gleicheGruppe_(b, gruppeId) { return !txt_(gruppeId) || rang_(b) >= 4 || txt_(b.gruppe_id) === txt_(gruppeId); }
+function personSichtbar_(b, z) { return rang_(b) >= 4 || !txt_(z.gruppe_id) || !txt_(b.gruppe_id) || txt_(z.gruppe_id) === txt_(b.gruppe_id); }
+function gruppen_() {
+  return tab_('Gruppen').zeilen.filter(function (z) { return txt_(z.gruppe_id) && txt_(z.name); })
+    .map(function (z) { return { gruppe_id: txt_(z.gruppe_id), name: txt_(z.name), sortierung: Number(z.sortierung) || 0 }; })
+    .sort(function (a, c) { return a.sortierung - c.sortierung || a.name.localeCompare(c.name); });
+}
+
+function marktRecht_(b, marktId) { return rang_(b) >= 3 && gleicheGruppe_(b, gruppeMarkt_(marktId)); }
 function verantwortliche_(art, ref) {
   return tab_('Zuständigkeiten').zeilen.filter(function (z) { return txt_(z.art) === art && txt_(z.ref_id) === txt_(ref) && ja_(z.verantwortlich); }).map(function (z) { return txt_(z.benutzer_id); });
 }
 const verantwortlich_ = function (b, art, ref) { return verantwortliche_(art, ref).indexOf(txt_(b.benutzer_id)) >= 0; };
 /* Ändern: Verantwortliche und höhere Rollen; andere Leitungen schlagen vor */
-function standAendern_(b, standId) { return rang_(b) >= 3 || verantwortlich_(b, 'stand', standId); }
+function standAendern_(b, standId) { return (rang_(b) >= 3 && gleicheGruppe_(b, gruppeStand_(standId))) || verantwortlich_(b, 'stand', standId); }
 function marktAendern_(b, marktId) { return rang_(b) >= 4 || (rang_(b) >= 3 && verantwortlich_(b, 'markt', marktId)); }
 /* Für Hinweise: Stände, um die sich jemand selbst kümmert */
 function eigeneStaende_(b) {
@@ -324,7 +428,8 @@ function eigeneStaende_(b) {
 }
 
 function standRecht_(b, standId) {
-  if (rang_(b) >= 3) return !!stand_(standId) || rang_(b) >= 4;
+  if (rang_(b) >= 4) return true;
+  if (rang_(b) >= 3) return !!stand_(standId) && gleicheGruppe_(b, gruppeStand_(standId));
   return rang_(b) >= 2 && zustaendig_(b, 'stand', standId);
 }
 
@@ -364,10 +469,13 @@ function einladungErstellen_(p) {
   const b = auth_(p, 2);
   const name = name_(p.name);
   if (name.length < 2) throw new Error('Name fehlt.');
+  // Einladen nur in die eigene Gruppe; Admins wählen
+  const gruppe = rang_(b) >= 4 && txt_(p.gruppe_id) ? txt_(p.gruppe_id) : txt_(b.gruppe_id);
+  if (gruppe && !gruppen_().some(function (g) { return g.gruppe_id === gruppe; })) throw new Error('Gruppe unbekannt.');
   return sperre_(function () {
     if (tab_('Benutzer').zeilen.some(function (x) { return name_(x.name).toLowerCase() === name.toLowerCase(); })) throw new Error('Name gibt es schon.');
     const token = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
-    anhaengen_(tab_('Einladungen'), [{ token: token, name: name, erstellt_von: txt_(b.benutzer_id), erstellt_am: new Date(), gueltig_bis: new Date(Date.now() + 24 * 3600000) }]);
+    anhaengen_(tab_('Einladungen'), [{ token: token, name: name, erstellt_von: txt_(b.benutzer_id), erstellt_am: new Date(), gueltig_bis: new Date(Date.now() + 24 * 3600000), gruppe_id: gruppe }]);
     return { ok: true, token: token, name: name };
   });
 }
@@ -392,7 +500,7 @@ function registrieren_(p) {
     const name = name_(e.z.name);
     if (t.zeilen.some(function (x) { return name_(x.name).toLowerCase() === name.toLowerCase(); })) return { ok: false, fehler: 'Name gibt es schon.' };
     const id = Utilities.getUuid();
-    const neu = anhaengen_(t, [{ benutzer_id: id, name: name, registriert_am: new Date(), geraet_id: txt_(p.geraet_id), rolle: 'Helfer', aktiv: 'WARTET', pin_hash: pinHash_(id, pin), pin_fehler: 0, eingeladen_von: txt_(e.z.erstellt_von) }])[0];
+    const neu = anhaengen_(t, [{ benutzer_id: id, name: name, registriert_am: new Date(), geraet_id: txt_(p.geraet_id), rolle: 'Helfer', aktiv: 'WARTET', pin_hash: pinHash_(id, pin), pin_fehler: 0, eingeladen_von: txt_(e.z.erstellt_von), gruppe_id: txt_(e.z.gruppe_id) }])[0];
     setzen_(tab_('Einladungen'), e.z, 'eingeloest_von', id);
     platzhalterVerknuepfen_(id, name);
     return { ok: true, benutzer: benutzerInfo_(neu) };
@@ -438,7 +546,11 @@ function anmelden_(p) {
       return { ok: false, fehler: 'Name oder PIN falsch.' };
     }
     if (Number(z.pin_fehler)) setzen_(t, z, 'pin_fehler', 0);
-    if (txt_(p.geraet_id)) setzen_(t, z, 'geraet_id', txt_(p.geraet_id));
+    if (txt_(p.geraet_id) && txt_(p.geraet_id) !== txt_(z.geraet_id)) {
+      // Gerätewechsel: Einträge, die das alte Gerät vorher erfasst hat, werden noch angenommen
+      if (txt_(z.geraet_id)) { setzen_(t, z, 'geraet_alt', txt_(z.geraet_id)); setzen_(t, z, 'geraet_seit', new Date()); }
+      setzen_(t, z, 'geraet_id', txt_(p.geraet_id));
+    }
     if (!t.zeilen.some(function (x) { return rolle_(x) === 'Admin' && status_(x) === 'aktiv'; })) setzen_(t, z, 'rolle', 'Admin');
     return { ok: true, benutzer: benutzerInfo_(z) };
   });
@@ -494,6 +606,7 @@ function verantwortungFuer_() {
 }
 
 function stammdaten_(p) {
+  const v = datenstand_();   // zuerst lesen: was danach geändert wird, bekommt einen neuen Datenstand
   let b;
   try { b = auth_(p); }
   catch (err) {
@@ -502,6 +615,8 @@ function stammdaten_(p) {
     if (z && status_(z) === 'gesperrt') return { ok: true, benutzer: benutzerInfo_(z) };
     return { ok: false, fehler: 'NICHT_ANGEMELDET', abgemeldet: true };
   }
+  // Nichts geändert: kurze Antwort, ohne die übrigen Tabellen zu lesen
+  if (p.v && p.v === v) return { ok: true, version: VERSION, heute: heute_(), v: v, gleich: true, benutzer: benutzerInfo_(b) };
   const e = einstellungen_();
   const alleNamen = namen_();
   const bilder = ordnerListe_(e.bilder_ordner_id), infos = ordnerListe_(e.info_ordner_id);
@@ -518,10 +633,10 @@ function stammdaten_(p) {
     });
     return { produkt_id: txt_(z.produkt_id), name: txt_(z.name), kategorie: txt_(z.kategorie), preis: cent_(z.preis), sortierung: Number(z.sortierung) || 0,
       bild: bild && bilder[bild] ? bild : '', bild_t: bild && bilder[bild] ? bilder[bild].t : 0, beschreibung: txt_(z.beschreibung), info: info,
-      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich: txt_(z.verantwortlich_id) ? (alleNamen[txt_(z.verantwortlich_id)] || '') : name_(z.verantwortlich_platzhalter) };
+      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich: txt_(z.verantwortlich_id) ? (alleNamen[txt_(z.verantwortlich_id)] || '') : name_(z.verantwortlich_platzhalter), pfand_id: txt_(z.pfand_id) };
   });
-  const maerkte = tab_('Märkte').zeilen.filter(function (z) { return txt_(z.markt_id) && !ja_(z.archiviert); }).map(function (z) {
-    return { markt_id: txt_(z.markt_id), name: txt_(z.name), ort: txt_(z.ort), datum_von: tag_(z.datum_von), datum_bis: tag_(z.datum_bis) };
+  const maerkte = tab_('Märkte').zeilen.filter(function (z) { return txt_(z.markt_id) && !ja_(z.archiviert) && gleicheGruppe_(b, z.gruppe_id); }).map(function (z) {
+    return { markt_id: txt_(z.markt_id), name: txt_(z.name), ort: txt_(z.ort), datum_von: tag_(z.datum_von), datum_bis: tag_(z.datum_bis), gruppe_id: txt_(z.gruppe_id) };
   });
   const offeneMaerkte = {};
   maerkte.forEach(function (m) { offeneMaerkte[m.markt_id] = true; });
@@ -538,18 +653,18 @@ function stammdaten_(p) {
   const daten = {
     einstellungen: {
       app_titel: txt_(e.app_titel) || 'Weihnachtsmarkt-Kasse', verein: txt_(e.verein),
-      schnellbetraege: txt_(e.schnellbetraege || '1;2;5;10;20;50').split(/[;,]/).map(Number).filter(function (n) { return n > 0; }),
+      schnellbetraege: betraege_(e.schnellbetraege),
       storno_anzahl: Number(e.storno_anzahl) || 2, abgleich_sekunden: Math.max(20, Number(e.abgleich_sekunden) || 60), puffer_min: PUFFER_MIN
     },
-    aufgaben: aufgaben_(), kategorien: kategorien, produkte: produkte, maerkte: maerkte, staende: staende, preise: preise, verfuegbarkeit: verfuegbarkeit
+    aufgaben: aufgaben_(), kategorien: kategorien, produkte: produkte, maerkte: maerkte, staende: staende, preise: preise, verfuegbarkeit: verfuegbarkeit, gruppen: gruppen_()
   };
   const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(daten), Utilities.Charset.UTF_8)
     .map(function (x) { return ('0' + (x & 255).toString(16)).slice(-2); }).join('');
-  const kopf = { ok: true, version: VERSION, heute: heute_(), hash: hash, benutzer: benutzerInfo_(b), zugang: zugangFuer_(b, p.geraet_id), rechte: rechteFuer_(b),
+  const kopf = { ok: true, version: VERSION, heute: heute_(), v: v, hash: hash, benutzer: benutzerInfo_(b), zugang: zugangFuer_(b, p.geraet_id), rechte: rechteFuer_(b),
     hinweise: hinweisListe_(b), nachrichten: nachrichtenFuer_(b), schichten: schichtenFuer_(b, staende), checklisten: checklistenFuer_(b),
     verantwortung: verantwortungFuer_(), vorlagen: rang_(b) >= 2 ? vorlagenFuer_(b) : [] };
-  if (kopf.rechte.staende.length) kopf.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt); })
-    .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z) }; }).sort(function (a, c) { return a.name.localeCompare(c.name); });
+  if (kopf.rechte.staende.length || rang_(b) >= 3) kopf.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && personSichtbar_(b, z); })
+    .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), gruppe_id: txt_(z.gruppe_id) }; }).sort(function (a, c) { return a.name.localeCompare(c.name); });
   if (p.hash && p.hash === hash) return Object.assign(kopf, { unveraendert: true });
   return Object.assign(kopf, daten);
 }
@@ -586,22 +701,27 @@ function dateien_(p) {
 function sync_(p) {
   return sperre_(function () {
     const erledigt = [], fehler = [];
+    const bons = { vk: null, pos: null, ids: null, zeilen: [], positionen: [] };
     (p.eintraege || []).forEach(function (en) {
       try {
-        const d = en.data || {}, bid = en.benutzer_id || p.benutzer_id;
-        if (en.typ === 'Bon') bonSpeichern_(d);
-        else if (en.typ === 'Storno') stornieren_(d, bid);
-        else if (en.typ === 'Verfuegbarkeit') verfuegbarkeitSetzen_(d, bid);
+        const d = en.data || {}, bid = txt_(en.benutzer_id || p.benutzer_id);
+        if (en.typ === 'Bon') bonSpeichern_(d, p, en, bons);
         else if (en.typ === 'Rueckmeldung') rueckmeldungSpeichern_(d);
-        else if (en.typ === 'Aktion') aktionAusfuehren_(d, bid, p.geraet_id);
         else if (en.typ === 'Benutzer') { /* alte App-Versionen: ignorieren */ }
+        else if (en.typ === 'Storno' || en.typ === 'Verfuegbarkeit' || en.typ === 'Aktion') {
+          const b = eintragPerson_(bid, p.geraet_id, en.t);
+          if (!b) throw new Error('Auf einem anderen Gerät angemeldet.');
+          if (en.typ === 'Storno') { bonsSchreiben_(bons); stornieren_(d, bid); }
+          else if (en.typ === 'Verfuegbarkeit') verfuegbarkeitSetzen_(d, bid);
+          else aktionAusfuehren_(d, bid, txt_(b.geraet_id) || p.geraet_id);
+        }
         else throw new Error('Unbekannter Eintrag: ' + en.typ);
         erledigt.push(en.id);
       } catch (err) {
         fehler.push({ id: en.id, typ: en.typ, fehler: String((err && err.message) || err) });
       }
     });
-    SpreadsheetApp.flush();
+    bonsSchreiben_(bons);
     return { ok: true, erledigt: erledigt, fehler: fehler };
   });
 }
@@ -614,10 +734,15 @@ function aktionAusfuehren_(d, benutzerId, geraetId) {
   if (!r || !r.ok) throw new Error((r && r.fehler) || 'Fehler');
 }
 
-function bonSpeichern_(d) {
+/* Bons: nur die Spalte bon_id lesen (Doppelte erkennen), alle Bons eines Abgleichs in einem Zug schreiben */
+function bonSpeichern_(d, p, en, bons) {
   if (!d.bon_id || !Array.isArray(d.positionen)) throw new Error('Bon unvollständig.');
-  const vk = tab_('Verkäufe');
-  if (vk.zeilen.some(function (z) { return txt_(z.bon_id) === d.bon_id; })) return;
+  if (!bons.ids) {
+    bons.vk = kopf_('Verkäufe'); bons.pos = kopf_('Positionen'); bons.ids = {};
+    spaltenLesen_(bons.vk, ['bon_id']).forEach(function (z) { bons.ids[txt_(z.bon_id)] = true; });
+  }
+  if (bons.ids[txt_(d.bon_id)]) return;
+  bons.ids[txt_(d.bon_id)] = true;
   const standId = txt_(d.stand_id || d.markt_id);
   const zeit = new Date(d.zeit);
   const hinweise = [];
@@ -625,6 +750,7 @@ function bonSpeichern_(d) {
   const s = stand_(standId);
   if (!b) hinweise.push('Person unbekannt');
   else if (status_(b) !== 'aktiv') hinweise.push('Person nicht freigegeben');
+  else if (!eintragPerson_(d.benutzer_id, p.geraet_id, en && en.t)) hinweise.push('anderes Gerät');
   const leitung = b && standRecht_(b, standId);
   if (d.art === 'nachtrag') {
     if (!leitung) hinweise.push('Nachtrag ohne Berechtigung');
@@ -632,38 +758,59 @@ function bonSpeichern_(d) {
     if (!leitung && !schichtAktiv_(d.benutzer_id, standId, zeit)) {
       const tag = tag_(zeit);
       const frei = tab_('Zugangscodes').zeilen.some(function (z) {
-        return txt_(z.geraet_id) === d.geraet_id && txt_(z.stand_id) === standId && tag_(z.datum) === tag && zugangGueltig_(z, zeit);
+        return txt_(z.geraet_id) === txt_(d.geraet_id) && txt_(z.stand_id) === standId && tag_(z.datum) === tag && zugangGueltig_(z, zeit);
       });
       if (!frei) hinweise.push('ohne Freischaltung');
     }
     if (s && !innerhalbStandzeit_(s, zeit)) hinweise.push('außerhalb Standzeit');
   }
-  anhaengen_(vk, [{
+  if (hinweise.length) geschrieben_ = true;   // Hinweis an die Leitung
+  const storniert = d.status === 'storniert';
+  bons.zeilen.push({
     bon_id: d.bon_id, zeit: zeit, stand_id: standId, benutzer_id: d.benutzer_id, geraet_id: d.geraet_id,
     anzahl_artikel: Number(d.anzahl_artikel) || 0, summe: euro_(d.summe),
     gegeben: d.gegeben === null || d.gegeben === undefined ? '' : euro_(d.gegeben),
     rueckgeld: d.rueckgeld === null || d.rueckgeld === undefined ? '' : euro_(d.rueckgeld),
-    status: d.status === 'storniert' ? 'storniert' : 'ok', art: d.art === 'nachtrag' ? 'nachtrag' : 'kasse',
+    status: storniert ? 'storniert' : 'ok', art: d.art === 'nachtrag' ? 'nachtrag' : 'kasse',
     empfangen_am: new Date(), hinweis: hinweise.join('; ')
-  }]);
-  anhaengen_(tab_('Positionen'), d.positionen.map(function (pos, i) {
-    return { bon_id: d.bon_id, pos_nr: pos.pos_nr || i + 1, zeit: zeit, stand_id: standId, benutzer_id: d.benutzer_id,
-      produkt_id: pos.produkt_id, produktname: pos.produktname, kategorie: pos.kategorie,
-      einzelpreis: euro_(pos.einzelpreis), menge: Number(pos.menge) || 0, zeilensumme: euro_(pos.zeilensumme),
-      status: d.status === 'storniert' ? 'storniert' : 'ok' };
-  }));
+  });
+  d.positionen.forEach(function (pos, i) {
+    bons.positionen.push({ bon_id: d.bon_id, pos_nr: pos.pos_nr || i + 1, zeit: zeit, stand_id: standId, benutzer_id: d.benutzer_id,
+      produkt_id: txt_(pos.produkt_id), produktname: txt_(pos.produktname), kategorie: txt_(pos.kategorie),
+      einzelpreis: euro_(pos.einzelpreis), menge: Number(pos.menge) || 0, zeilensumme: euro_(pos.zeilensumme), status: storniert ? 'storniert' : 'ok' });
+  });
+}
+function bonsSchreiben_(bons) {
+  if (!bons.zeilen.length) return;
+  anhaengen_(bons.vk, bons.zeilen); anhaengen_(bons.pos, bons.positionen);
+  bons.zeilen = []; bons.positionen = [];
 }
 
+/* Bon über die Spalte bon_id finden, ohne die ganze Tabelle zu lesen */
+function bonZeile_(bonId) {
+  const vk = kopf_('Verkäufe');
+  const ids = spaltenLesen_(vk, ['bon_id']);
+  for (let i = ids.length - 1; i >= 0; i--) {
+    if (txt_(ids[i].bon_id) === txt_(bonId)) {
+      const w = vk.sh.getRange(ids[i]._zeile, 1, 1, vk.kopf.length).getValues()[0];
+      const o = { _zeile: ids[i]._zeile };
+      vk.kopf.forEach(function (h, j) { if (h) o[h] = w[j]; });
+      return { vk: vk, z: o };
+    }
+  }
+  return null;
+}
 function stornieren_(d, benutzerId) {
-  const vk = tab_('Verkäufe');
-  const bon = vk.zeilen.filter(function (z) { return txt_(z.bon_id) === d.bon_id; })[0];
-  if (!bon) throw new Error('Bon nicht gefunden.');
+  const f = bonZeile_(d.bon_id);
+  if (!f) throw new Error('Bon nicht gefunden.');
+  const bon = f.z, vk = f.vk;
   const b = benutzer_(benutzerId);
   if (txt_(bon.benutzer_id) !== txt_(benutzerId) && !(b && standRecht_(b, bon.stand_id))) throw new Error('Keine Berechtigung zum Stornieren.');
   if (txt_(bon.status) === 'storniert') return;
+  if (txt_(bon.hinweis) && !txt_(bon.bestaetigt_am)) geschrieben_ = true;
   setzen_(vk, bon, 'status', 'storniert');
-  const pos = tab_('Positionen');
-  pos.zeilen.forEach(function (z) { if (txt_(z.bon_id) === d.bon_id) setzen_(pos, z, 'status', 'storniert'); });
+  const pos = kopf_('Positionen');
+  spaltenLesen_(pos, ['bon_id']).forEach(function (z) { if (txt_(z.bon_id) === txt_(d.bon_id)) setzen_(pos, z, 'status', 'storniert'); });
 }
 
 function verfuegbarkeitSetzen_(d, benutzerId) {
@@ -683,8 +830,15 @@ function verfuegbarkeitSetzen_(d, benutzerId) {
 function rueckmeldungSpeichern_(d) {
   const t = tab_('Rückmeldungen');
   if (t.zeilen.some(function (z) { return txt_(z.rm_id) === d.rm_id; })) return;
+  let bild = '';
+  if (d.bild && typeof d.bild === 'string' && d.bild.length < 1500000) {
+    try {
+      const ordner = ordnerSicherstellen_('rueckmeldung_ordner_id', 'Kassen-App Rückmeldungen');
+      bild = dateiSpeichern_(ordner, 'rm_' + txt_(d.rm_id).slice(0, 8) + '_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '.jpg', d.bild, 'image/jpeg', false);
+    } catch (err) { console.error('Foto', err); }
+  }
   anhaengen_(t, [{ rm_id: d.rm_id, zeit: new Date(d.zeit || Date.now()), benutzer_id: d.benutzer_id, stand_id: txt_(d.stand_id || d.markt_id),
-    typ: d.typ, text: txt_(d.text).slice(0, 2000), geraet_info: txt_(d.geraet_info).slice(0, 200), status: 'neu' }]);
+    typ: d.typ, text: txt_(d.text).slice(0, 2000), geraet_info: txt_(d.geraet_info).slice(0, 200), status: 'neu', bild: bild }]);
   const mail = txt_(einstellungen_().benachrichtigung_email);
   if (d.typ === 'Problem' && mail.indexOf('@') > 0) {
     try {
@@ -770,8 +924,8 @@ function plan_(p) {
   }).filter(function (x) { return leitung || x.status !== 'abgelehnt'; });
   const out = { ok: true, schichten: schichten, standzeiten: standzeiten_(s.standzeiten), aufgaben: aufgaben_(), leitung: leitung };
   if (leitung) {
-    out.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv'; })
-      .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z) }; })
+    out.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && personSichtbar_(b, z); })
+      .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), gruppe_id: txt_(z.gruppe_id) }; })
       .sort(function (a, c) { return a.name.localeCompare(c.name); });
   }
   return out;
@@ -792,15 +946,20 @@ function ueberschneidungPruefen_(benutzerId, datum, von, bis, ausser) {
 }
 function schichtSpeichern_(p) {
   const b = auth_(p);
-  const d = p.schicht || {};
+  let d = p.schicht || {};
   const leitung = standRecht_(b, d.stand_id);
   if (!stand_(d.stand_id)) throw new Error('Stand nicht gefunden.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(txt_(d.datum))) throw new Error('Datum fehlt.');
   if (!uhr_(d.von) || !uhr_(d.bis) || minuten_(d.bis) <= minuten_(d.von)) throw new Error('Zeiten prüfen.');
-  if (aufgaben_().indexOf(txt_(d.aufgabe)) < 0) throw new Error('Aufgabe unbekannt.');
+  if (aufgaben_().indexOf(txt_(d.aufgabe)) < 0 && txt_(d.aufgabe) !== EGAL) throw new Error('Aufgabe unbekannt.');
   return sperre_(function () {
     const t = tab_('Schichten');
     let benutzerId = txt_(d.benutzer_id), platzhalter = name_(d.platzhalter), status = 'geplant';
+    // Eigene, schon bestätigte Schicht ändern: als Wechsel, die Leitung bestätigt
+    let vorhanden = txt_(d.schicht_id) ? t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(d.schicht_id); })[0] : null;
+    if (vorhanden && !leitung && txt_(vorhanden.benutzer_id) === txt_(b.benutzer_id) && txt_(vorhanden.status) === 'geplant') {
+      d = Object.assign({}, d, { schicht_id: Utilities.getUuid().slice(0, 8), ersetzt: txt_(vorhanden.schicht_id) });
+    }
     if (!leitung) { benutzerId = txt_(b.benutzer_id); platzhalter = ''; status = 'vorgeschlagen'; }
     if (!benutzerId && !platzhalter) throw new Error('Person fehlt.');
     if (benutzerId && txt_(d.aufgabe) === 'Standleitung') {
@@ -840,9 +999,57 @@ function schichtLoeschen_(p) {
   });
 }
 
+/* Tag kopieren: alle bestätigten Schichten eines Tages auf einen anderen Tag (ganztägige passen sich an die Standzeit an) */
+function planKopieren_(p) {
+  const b = auth_(p, 2);
+  standPruefen_(b, p.stand_id);
+  const s = stand_(p.stand_id);
+  if (!s) throw new Error('Stand nicht gefunden.');
+  const von = txt_(p.von_datum), nach = txt_(p.nach_datum);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(von) || !/^\d{4}-\d{2}-\d{2}$/.test(nach) || von === nach) throw new Error('Tage prüfen.');
+  const zeiten = standzeiten_(s.standzeiten);
+  const za = zeiten.filter(function (z) { return z.datum === von; })[0], zn = zeiten.filter(function (z) { return z.datum === nach; })[0];
+  return sperre_(function () {
+    const t = tab_('Schichten');
+    const quelle = t.zeilen.filter(function (z) { return txt_(z.stand_id) === txt_(p.stand_id) && tag_(z.datum) === von && txt_(z.status) === 'geplant'; });
+    const ziel = t.zeilen.filter(function (z) { return txt_(z.stand_id) === txt_(p.stand_id) && tag_(z.datum) === nach && txt_(z.status) !== 'abgelehnt'; });
+    let n = 0, weg = 0;
+    quelle.forEach(function (z) {
+      let a = uhr_(z.von), e = uhr_(z.bis);
+      if (za && zn && a === za.von && e === za.bis) { a = zn.von; e = zn.bis; }
+      const bid = txt_(z.benutzer_id), ph = name_(z.platzhalter);
+      const doppelt = ziel.some(function (x) { return txt_(x.benutzer_id) === bid && name_(x.platzhalter) === ph && txt_(x.aufgabe) === txt_(z.aufgabe) && uhr_(x.von) === a && uhr_(x.bis) === e; });
+      if (doppelt || (bid && ueberschneidung_(bid, nach, a, e))) { weg++; return; }
+      anhaengen_(t, [{ schicht_id: Utilities.getUuid().slice(0, 8), stand_id: txt_(p.stand_id), datum: alsText_(nach), von: alsText_(a), bis: alsText_(e), aufgabe: txt_(z.aufgabe),
+        benutzer_id: bid, platzhalter: ph, status: 'geplant', erstellt_von: txt_(b.benutzer_id) }]);
+      n++;
+    });
+    return { ok: true, anzahl: n, uebersprungen: weg };
+  });
+}
+
 /* ===================================================================
    Hinweise: was die Leitung erledigen muss
    =================================================================== */
+/* Offene Bons mit Hinweis: erst nur die Spalte hinweis lesen, dann die wenigen Treffer ganz */
+function bonsMitHinweis_() {
+  const vk = kopf_('Verkäufe');
+  const l = spaltenLesen_(vk, ['hinweis', 'bestaetigt_am', 'status']).filter(function (z) { return txt_(z.hinweis) && !txt_(z.bestaetigt_am) && txt_(z.status) === 'ok'; });
+  return l.slice(-200).map(function (z) {
+    const w = vk.sh.getRange(z._zeile, 1, 1, vk.kopf.length).getValues()[0], o = { _zeile: z._zeile };
+    vk.kopf.forEach(function (h, j) { if (h) o[h] = w[j]; });
+    return o;
+  });
+}
+/* Erste Zeile mit einem heutigen Eintrag: davor steht nichts von heute */
+function heuteAb_(t) {
+  const n = t.letzte - 1;
+  if (n < 2000) return 2;
+  const zeiten = t.sh.getRange(2, spalte_(t, 'zeit'), n, 1).getValues(), h = heute_();
+  for (let i = 0; i < n; i++) if (zeiten[i][0] && tag_(zeiten[i][0]) >= h) return i + 2;
+  return t.letzte + 1;
+}
+
 function hinweisListe_(b) {
   const out = [];
   const namen = namen_(), ich = txt_(b.benutzer_id), admin = rang_(b) >= 4;
@@ -854,8 +1061,7 @@ function hinweisListe_(b) {
     if (status_(z) !== 'wartet' || ja_(z.entfernt)) return;
     add({ typ: 'registrierung', id: txt_(z.benutzer_id), titel: name_(z.name), text: 'Registrierung' + (txt_(z.eingeladen_von) ? ' · eingeladen von ' + (namen[txt_(z.eingeladen_von)] || '') : ''), zeit: iso_(z.registriert_am) }, txt_(z.eingeladen_von) === ich);
   });
-  tab_('Verkäufe').zeilen.forEach(function (z) {
-    if (!txt_(z.hinweis) || txt_(z.bestaetigt_am) || txt_(z.status) !== 'ok') return;
+  bonsMitHinweis_().forEach(function (z) {
     add({ typ: 'bon', id: txt_(z.bon_id), titel: euro_(cent_(z.summe)).toFixed(2).replace('.', ',') + ' € · ' + (namen[txt_(z.benutzer_id)] || ''), text: txt_(z.hinweis), stand: standName[txt_(z.stand_id)], zeit: iso_(z.zeit) }, eigene[txt_(z.stand_id)]);
   });
   const produkte = {};
@@ -914,13 +1120,14 @@ function hinweisAktion_(p) {
       const t = tab_('Benutzer');
       const z = t.zeilen.filter(function (x) { return txt_(x.benutzer_id) === txt_(p.id); })[0];
       if (!z || status_(z) !== 'wartet') throw new Error('Nicht gefunden.');
-      if (!(rang_(b) >= 3 || txt_(z.eingeladen_von) === txt_(b.benutzer_id))) throw new Error('Keine Berechtigung.');
+      if (!((rang_(b) >= 3 && personSichtbar_(b, z)) || txt_(z.eingeladen_von) === txt_(b.benutzer_id))) throw new Error('Keine Berechtigung.');
       setzen_(t, z, 'aktiv', ja ? 'JA' : 'NEIN');
     } else if (p.typ === 'bon') {
-      const t = tab_('Verkäufe');
-      const z = t.zeilen.filter(function (x) { return txt_(x.bon_id) === txt_(p.id); })[0];
-      if (!z) throw new Error('Nicht gefunden.');
+      const f = bonZeile_(p.id);
+      if (!f) throw new Error('Nicht gefunden.');
+      const z = f.z, t = f.vk;
       standPruefen_(b, z.stand_id);
+      geschrieben_ = true;
       if (ja) { setzen_(t, z, 'bestaetigt_von', txt_(b.benutzer_id)); setzen_(t, z, 'bestaetigt_am', new Date()); }
       else { stornieren_({ bon_id: txt_(p.id) }, txt_(b.benutzer_id)); }
     } else if (p.typ === 'ausverkauft') {
@@ -1008,6 +1215,7 @@ function nachrichtSenden_(p) {
   const personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt); });
   let ids;
   if (ziel.art === 'rolle') ids = personen.filter(function (z) { return rolle_(z) === ziel.wert; }).map(function (z) { return txt_(z.benutzer_id); });
+  else if (ziel.art === 'gruppe') ids = personen.filter(function (z) { return txt_(z.gruppe_id) === txt_(ziel.wert); }).map(function (z) { return txt_(z.benutzer_id); });
   else if (ziel.art === 'stand' || ziel.art === 'markt') {
     const staende = ziel.art === 'stand' ? [txt_(ziel.wert)] : tab_('Stände').zeilen.filter(function (s) { return txt_(s.markt_id) === txt_(ziel.wert); }).map(function (s) { return txt_(s.stand_id); });
     const set = {};
@@ -1051,17 +1259,18 @@ function vorschlagEntscheiden_(b, id, ja) {
    Übersicht
    =================================================================== */
 function uebersicht_(p) {
-  const b = auth_(p, 2);
+  const b = auth_(p, 3);
   const h = heute_();
   const proStand = {};
-  tab_('Verkäufe').zeilen.forEach(function (z) {
+  const vk = kopf_('Verkäufe'), pos = kopf_('Positionen');
+  spaltenLesen_(vk, ['zeit', 'stand_id', 'summe', 'status'], heuteAb_(vk)).forEach(function (z) {
     if (txt_(z.status) !== 'ok' || tag_(z.zeit) !== h || !standRecht_(b, z.stand_id)) return;
     const s = txt_(z.stand_id);
     proStand[s] = proStand[s] || { bons: 0, summe: 0 };
     proStand[s].bons += 1; proStand[s].summe += cent_(z.summe);
   });
   const top = {};
-  tab_('Positionen').zeilen.forEach(function (z) {
+  spaltenLesen_(pos, ['zeit', 'stand_id', 'produktname', 'menge', 'status'], heuteAb_(pos)).forEach(function (z) {
     if (txt_(z.status) !== 'ok' || tag_(z.zeit) !== h || txt_(z.stand_id) !== txt_(p.stand_id)) return;
     top[txt_(z.produktname)] = (top[txt_(z.produktname)] || 0) + (Number(z.menge) || 0);
   });
@@ -1072,13 +1281,13 @@ function uebersicht_(p) {
    Personen verwalten
    =================================================================== */
 function benutzerListe_(p) {
-  auth_(p, 3);
+  const ich = auth_(p, 3);
   const zust = {}, plan = {}, prod = {}, aktiv = {};
   tab_('Zuständigkeiten').zeilen.forEach(function (z) { const id = txt_(z.benutzer_id); (zust[id] = zust[id] || []).push({ art: txt_(z.art), ref_id: txt_(z.ref_id), verantwortlich: ja_(z.verantwortlich) }); });
   tab_('Schichten').zeilen.forEach(function (z) { const id = txt_(z.benutzer_id); if (!id) return; aktiv[id] = true; (plan[id] = plan[id] || {})[txt_(z.stand_id)] = true; });
   tab_('Produkte').zeilen.forEach(function (z) { const id = txt_(z.verantwortlich_id); if (id) (prod[id] = prod[id] || []).push(txt_(z.name)); });
-  tab_('Verkäufe').zeilen.forEach(function (z) { aktiv[txt_(z.benutzer_id)] = true; });
-  return { ok: true, benutzer: tab_('Benutzer').zeilen.filter(function (z) { return txt_(z.benutzer_id) && !ja_(z.entfernt); }).map(function (z) {
+  spaltenLesen_(kopf_('Verkäufe'), ['benutzer_id']).forEach(function (z) { aktiv[txt_(z.benutzer_id)] = true; });
+  return { ok: true, benutzer: tab_('Benutzer').zeilen.filter(function (z) { return txt_(z.benutzer_id) && !ja_(z.entfernt) && personSichtbar_(ich, z); }).map(function (z) {
     const id = txt_(z.benutzer_id);
     return Object.assign(benutzerInfo_(z), { pin: !!txt_(z.pin_hash), zust: zust[id] || [], plan: Object.keys(plan[id] || {}), produkte: prod[id] || [], loeschbar: !aktiv[id] });
   }) };
@@ -1090,10 +1299,10 @@ function benutzerLoeschen_(p) {
     const z = t.zeilen.filter(function (x) { return txt_(x.benutzer_id) === txt_(p.ziel_id); })[0];
     if (!z) throw new Error('Person nicht gefunden.');
     if (txt_(z.benutzer_id) === txt_(b.benutzer_id)) throw new Error('Nicht bei dir selbst.');
-    if (rang_(b) < 4 && rang_(z) >= 3) throw new Error('Keine Berechtigung.');
+    if (rang_(b) < 4 && (rang_(z) >= 3 || !personSichtbar_(b, z))) throw new Error('Keine Berechtigung.');
     if (rolle_(z) === 'Admin' && t.zeilen.filter(function (x) { return rolle_(x) === 'Admin' && status_(x) === 'aktiv' && !ja_(x.entfernt); }).length <= 1) throw new Error('Es muss mindestens einen Admin geben.');
     const id = txt_(z.benutzer_id);
-    const benutzt = tab_('Verkäufe').zeilen.some(function (x) { return txt_(x.benutzer_id) === id; }) || tab_('Schichten').zeilen.some(function (x) { return txt_(x.benutzer_id) === id; });
+    const benutzt = spaltenLesen_(kopf_('Verkäufe'), ['benutzer_id']).some(function (x) { return txt_(x.benutzer_id) === id; }) || tab_('Schichten').zeilen.some(function (x) { return txt_(x.benutzer_id) === id; });
     const zt = tab_('Zuständigkeiten');
     zt.zeilen.filter(function (x) { return txt_(x.benutzer_id) === id; }).forEach(function (x) {
       if (ja_(x.verantwortlich) && verantwortliche_(txt_(x.art), txt_(x.ref_id)).length <= 1) throw new Error('Ist einzige verantwortliche Person – erst Verantwortung weitergeben.');
@@ -1112,7 +1321,7 @@ function benutzerAendern_(p) {
     const z = t.zeilen.filter(function (x) { return txt_(x.benutzer_id) === txt_(p.ziel_id); })[0];
     if (!z) throw new Error('Person nicht gefunden.');
     const istAdmin = rang_(admin) >= 4;
-    if (!istAdmin && rang_(z) >= 3) throw new Error('Keine Berechtigung.');
+    if (!istAdmin && (rang_(z) >= 3 || !personSichtbar_(admin, z))) throw new Error('Keine Berechtigung.');
     const adminsAktiv = t.zeilen.filter(function (x) { return rolle_(x) === 'Admin' && status_(x) === 'aktiv'; }).length;
     const letzterAdmin = rolle_(z) === 'Admin' && status_(z) === 'aktiv' && adminsAktiv <= 1;
     if (p.rolle) {
@@ -1128,6 +1337,16 @@ function benutzerAendern_(p) {
       if (status_(z) === 'gesperrt' && p.status === 'aktiv') nachricht_(txt_(z.benutzer_id), 'Zugang freigegeben', '', admin);
       setzen_(t, z, 'aktiv', p.status === 'aktiv' ? 'JA' : 'NEIN');
       if (p.status === 'aktiv' && ja_(z.entfernt)) setzen_(t, z, 'entfernt', '');
+    }
+    if (p.gruppe_id !== undefined) {
+      if (!istAdmin) throw new Error('Gruppe ändern nur Admins.');
+      const g = txt_(p.gruppe_id);
+      if (g && !gruppen_().some(function (x) { return x.gruppe_id === g; })) throw new Error('Gruppe unbekannt.');
+      if (g !== txt_(z.gruppe_id)) {
+        const gn = (gruppen_().filter(function (x) { return x.gruppe_id === g; })[0] || {}).name || '';
+        if (txt_(z.benutzer_id) !== txt_(admin.benutzer_id)) nachricht_(txt_(z.benutzer_id), 'Neue Zuordnung: ' + gn, '', admin);
+        setzen_(t, z, 'gruppe_id', g);
+      }
     }
     if (p.neue_pin) {
       if (!istAdmin) throw new Error('Keine Berechtigung.');
@@ -1149,7 +1368,7 @@ function produkteAdmin_(p) {
     return { produkt_id: txt_(z.produkt_id), name: txt_(z.name), kategorie: txt_(z.kategorie), preis: cent_(z.preis), bild: txt_(z.bild),
       sortierung: Number(z.sortierung) || 0, aktiv: a !== 'NEIN' && a !== 'VORSCHLAG', vorschlag: a === 'VORSCHLAG', beschreibung: txt_(z.beschreibung),
       info_dateien: txt_(z.info_dateien).split(/[;,\n]/).map(txt_).filter(String),
-      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich_platzhalter: name_(z.verantwortlich_platzhalter), verantwortlich: namen[txt_(z.verantwortlich_id)] || '', offen: !!txt_(z.offen_am) };
+      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich_platzhalter: name_(z.verantwortlich_platzhalter), verantwortlich: namen[txt_(z.verantwortlich_id)] || '', offen: !!txt_(z.offen_am), pfand_id: txt_(z.pfand_id) };
   }) };
 }
 
@@ -1193,6 +1412,7 @@ function produktSpeichern_(p) {
       if (!txt_(d.name)) throw new Error('Name fehlt.');
       if (!txt_(d.kategorie)) throw new Error('Kategorie fehlt.');
       Object.assign(werte, { name: txt_(d.name), kategorie: txt_(d.kategorie), preis: euro_(d.preis), sortierung: Number(d.sortierung) || 0, aktiv: d.aktiv === false ? 'NEIN' : 'JA' });
+      if (d.pfand_id !== undefined) werte.pfand_id = txt_(d.pfand_id) === id ? '' : txt_(d.pfand_id);
       if (d.verantwortlich_id !== undefined || d.verantwortlich_platzhalter !== undefined) {
         let vid = txt_(d.verantwortlich_id), ph = vid ? '' : name_(d.verantwortlich_platzhalter);
         if (ph) { const tr = tab_('Benutzer').zeilen.filter(function (x) { return name_(x.name).toLowerCase() === ph.toLowerCase() && status_(x) === 'aktiv'; })[0]; if (tr) { vid = txt_(tr.benutzer_id); ph = ''; } }
@@ -1264,22 +1484,40 @@ function struktur_(p) {
   const b = auth_(p, 2);
   const namen = namen_();
   const zust = tab_('Zuständigkeiten').zeilen.map(function (z) { return { art: txt_(z.art), ref_id: txt_(z.ref_id), benutzer_id: txt_(z.benutzer_id), name: namen[txt_(z.benutzer_id)] || '', verantwortlich: ja_(z.verantwortlich) }; });
-  const maerkte = tab_('Märkte').zeilen.filter(function (z) { return txt_(z.markt_id); }).map(function (z) {
-    return { markt_id: txt_(z.markt_id), name: txt_(z.name), ort: txt_(z.ort), datum_von: tag_(z.datum_von), datum_bis: tag_(z.datum_bis), archiviert: ja_(z.archiviert),
-      recht: marktRecht_(b, z.markt_id), aendern: marktAendern_(b, z.markt_id), leitung: zust.filter(function (x) { return x.art === 'markt' && x.ref_id === txt_(z.markt_id); }) };
+  // Ampel: Checkliste, Verantwortliche, Lücken im Plan am nächsten Standtag
+  const ck = {};
+  tab_('Checklisten').zeilen.forEach(function (z) { const k = txt_(z.art) + ':' + txt_(z.ref_id); ck[k] = ck[k] || [0, 0]; ck[k][1]++; if (txt_(z.erledigt_am)) ck[k][0]++; });
+  const maerkte = tab_('Märkte').zeilen.filter(function (z) { return txt_(z.markt_id) && gleicheGruppe_(b, z.gruppe_id); }).map(function (z) {
+    return { markt_id: txt_(z.markt_id), name: txt_(z.name), ort: txt_(z.ort), datum_von: tag_(z.datum_von), datum_bis: tag_(z.datum_bis), archiviert: ja_(z.archiviert), gruppe_id: txt_(z.gruppe_id),
+      recht: marktRecht_(b, z.markt_id), aendern: marktAendern_(b, z.markt_id), leitung: zust.filter(function (x) { return x.art === 'markt' && x.ref_id === txt_(z.markt_id); }), check: ck['markt:' + txt_(z.markt_id)] || [0, 0] };
   });
-  const staende = tab_('Stände').zeilen.filter(function (z) { return txt_(z.stand_id); }).map(function (z) {
+  const offen = {}; maerkte.forEach(function (m) { offen[m.markt_id] = true; });
+  const staende = tab_('Stände').zeilen.filter(function (z) { return txt_(z.stand_id) && offen[txt_(z.markt_id)]; }).map(function (z) {
     const k = txt_(z.kategorien);
     return { stand_id: txt_(z.stand_id), markt_id: txt_(z.markt_id), name: txt_(z.name), archiviert: ja_(z.archiviert),
       kategorien: !k || k.toUpperCase() === 'ALLE' ? 'ALLE' : k.split(/[;,]/).map(txt_).filter(String), standzeiten: standzeiten_(z.standzeiten),
-      recht: standRecht_(b, z.stand_id), aendern: standAendern_(b, z.stand_id), leitung: zust.filter(function (x) { return x.art === 'stand' && x.ref_id === txt_(z.stand_id); }) };
+      recht: standRecht_(b, z.stand_id), aendern: standAendern_(b, z.stand_id), leitung: zust.filter(function (x) { return x.art === 'stand' && x.ref_id === txt_(z.stand_id); }),
+      check: ck['stand:' + txt_(z.stand_id)] || [0, 0], plan: planLuecke_(z) };
   }).filter(function (s) { return s.recht || maerkte.some(function (m) { return m.markt_id === s.markt_id && m.recht; }); });
   const sichtbar = maerkte.filter(function (m) { return m.recht || staende.some(function (s) { return s.markt_id === m.markt_id; }); });
   const out = { ok: true, maerkte: sichtbar, staende: staende };
-  out.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && rang_(z) >= 2; }).map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z) }; });
+  out.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && rang_(z) >= 2 && personSichtbar_(b, z); }).map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), gruppe_id: txt_(z.gruppe_id) }; });
   return out;
 }
-
+/* Nächster Standtag: wie viele Minuten der Standzeit niemand eingeteilt ist */
+function planLuecke_(stand) {
+  const h = heute_();
+  const z = standzeiten_(stand.standzeiten).filter(function (x) { return x.datum >= h; })[0];
+  if (!z) return null;
+  const a = minuten_(z.von), e = minuten_(z.bis);
+  const bl = tab_('Schichten').zeilen.filter(function (x) { return txt_(x.stand_id) === txt_(stand.stand_id) && tag_(x.datum) === z.datum && txt_(x.status) === 'geplant'; })
+    .map(function (x) { return [Math.max(a, minuten_(uhr_(x.von))), Math.min(e, minuten_(uhr_(x.bis)))]; }).filter(function (x) { return x[1] > x[0]; })
+    .sort(function (x, y) { return x[0] - y[0]; });
+  let frei = 0, pos = a;
+  bl.forEach(function (x) { if (x[0] > pos) frei += x[0] - pos; pos = Math.max(pos, x[1]); });
+  if (pos < e) frei += e - pos;
+  return { datum: z.datum, luecke: frei, schichten: bl.length };
+}
 function marktSpeichern_(p) {
   const b = auth_(p, 3);
   const d = p.markt || {};
@@ -1288,16 +1526,24 @@ function marktSpeichern_(p) {
     if (txt_(d.markt_id)) {
       const z = markt_(d.markt_id);
       if (!z) throw new Error('Markt nicht gefunden.');
+      if (!gleicheGruppe_(b, z.gruppe_id)) throw new Error('Keine Berechtigung.');
       if (!marktAendern_(b, d.markt_id)) return vorschlag_(b, 'markt', txt_(d.markt_id), 'markt:' + txt_(d.markt_id), { titel: 'Änderung Markt ' + txt_(z.name), text: aenderungsText_(z, d, ['name', 'ort', 'datum_von', 'datum_bis']) + (d.archiviert && !ja_(z.archiviert) ? ' archivieren' : ''), markt: d });
       marktUebernehmen_(d);
+      if (rang_(b) >= 4 && d.gruppe_id !== undefined) setzen_(tab_('Märkte'), markt_(d.markt_id), 'gruppe_id', gruppeGueltig_(d.gruppe_id));
       return { ok: true, markt_id: txt_(d.markt_id) };
     }
     const t = tab_('Märkte');
     const id = neueId_(t, 'markt_id', 'MK');
-    anhaengen_(t, [Object.assign({ markt_id: id }, marktWerte_(d))]);
+    const gruppe = rang_(b) >= 4 && d.gruppe_id !== undefined ? gruppeGueltig_(d.gruppe_id) : txt_(b.gruppe_id);
+    anhaengen_(t, [Object.assign({ markt_id: id, gruppe_id: gruppe }, marktWerte_(d))]);
     verantwortlichSetzen_('markt', id, b.benutzer_id, b.benutzer_id);
     return { ok: true, markt_id: id };
   });
+}
+function gruppeGueltig_(g) {
+  g = txt_(g);
+  if (g && !gruppen_().some(function (x) { return x.gruppe_id === g; })) throw new Error('Gruppe unbekannt.');
+  return g;
 }
 function marktWerte_(d) {
   const datum = function (v) { return /^\d{4}-\d{2}-\d{2}$/.test(txt_(v)) ? alsText_(txt_(v)) : ''; };
@@ -1321,13 +1567,17 @@ function standSpeichern_(p) {
     if (txt_(d.stand_id)) {
       const z = stand_(d.stand_id);
       if (!z) throw new Error('Stand nicht gefunden.');
+      // Archivieren nur Marktverantwortliche und Admins
+      if (!!d.archiviert !== ja_(z.archiviert) && !marktAendern_(b, z.markt_id)) {
+        if (d.archiviert) throw new Error('Archivieren nur durch Marktverantwortliche.');
+        d.archiviert = ja_(z.archiviert);
+      }
       if (!standAendern_(b, d.stand_id)) {
         standPruefen_(b, d.stand_id);
         const w = standWerte_(d), was = [];
         if (w.name !== txt_(z.name)) was.push('Name');
         if (w.standzeiten !== txt_(z.standzeiten)) was.push('Standzeiten');
         if (w.kategorien !== (txt_(z.kategorien) || 'ALLE')) was.push('Sortiment');
-        if (w.archiviert === 'JA' && !ja_(z.archiviert)) was.push('archivieren');
         if (!was.length) return { ok: true, stand_id: txt_(d.stand_id) };
         return vorschlag_(b, 'stand', txt_(d.stand_id), 'stand:' + txt_(d.stand_id), { titel: 'Änderung Stand ' + txt_(z.name), text: was.join(', '), stand: d });
       }
@@ -1443,7 +1693,7 @@ function checklistenFuer_(b) {
   const sichtbar = function (z) {
     if (txt_(z.zustaendig_id) === ich) return true;
     if (txt_(z.art) === 'stand') { const s = stand_(z.ref_id); return !!s && !ja_(s.archiviert) && standRecht_(b, z.ref_id); }
-    const m = markt_(z.ref_id); return !!m && !ja_(m.archiviert) && (rang_(b) >= 3 || zustaendig_(b, 'markt', z.ref_id));
+    const m = markt_(z.ref_id); return !!m && !ja_(m.archiviert) && (marktRecht_(b, z.ref_id) || zustaendig_(b, 'markt', z.ref_id));
   };
   return tab_('Checklisten').zeilen.filter(function (z) { return txt_(z.punkt_id) && sichtbar(z); }).map(function (z) {
     return { punkt_id: txt_(z.punkt_id), art: txt_(z.art), ref_id: txt_(z.ref_id), text: txt_(z.text), zustaendig_id: txt_(z.zustaendig_id),
@@ -1496,7 +1746,7 @@ function checkpunktHaken_(p) {
   });
 }
 function vorlagenFuer_(b) {
-  return tab_('Vorlagen').zeilen.filter(function (z) { return txt_(z.vorlage_id) && (txt_(z.typ) === 'global' || txt_(z.besitzer) === txt_(b.benutzer_id)); }).map(function (z) {
+  return tab_('Vorlagen').zeilen.filter(function (z) { return txt_(z.vorlage_id) && ((txt_(z.typ) === 'global' && gleicheGruppe_(b, z.gruppe_id)) || txt_(z.besitzer) === txt_(b.benutzer_id)); }).map(function (z) {
     let punkte = []; try { punkte = JSON.parse(txt_(z.punkte) || '[]'); } catch (e) { }
     return { vorlage_id: txt_(z.vorlage_id), name: txt_(z.name), typ: txt_(z.typ), basis_id: txt_(z.basis_id), punkte: punkte, eigen: txt_(z.besitzer) === txt_(b.benutzer_id) };
   });
@@ -1513,8 +1763,9 @@ function vorlageSpeichern_(p) {
     let z = t.zeilen.filter(function (x) { return txt_(x.vorlage_id) === txt_(d.vorlage_id); })[0];
     if (z && !(txt_(z.besitzer) === txt_(b.benutzer_id) || (txt_(z.typ) === 'global' && rang_(b) >= 3))) throw new Error('Keine Berechtigung.');
     const werte = { name: txt_(d.name), typ: typ, basis_id: typ === 'individuell' ? txt_(d.basis_id) : '', punkte: JSON.stringify(punkte), geaendert_am: new Date() };
+    if (z && !gleicheGruppe_(b, z.gruppe_id)) throw new Error('Keine Berechtigung.');
     if (z) Object.keys(werte).forEach(function (k) { setzen_(t, z, k, werte[k]); });
-    else z = anhaengen_(t, [Object.assign({ vorlage_id: txt_(d.vorlage_id) || Utilities.getUuid().slice(0, 10), besitzer: txt_(b.benutzer_id) }, werte)])[0];
+    else z = anhaengen_(t, [Object.assign({ vorlage_id: txt_(d.vorlage_id) || Utilities.getUuid().slice(0, 10), besitzer: txt_(b.benutzer_id), gruppe_id: txt_(b.gruppe_id) }, werte)])[0];
     return { ok: true, vorlage_id: txt_(z.vorlage_id) };
   });
 }
@@ -1524,7 +1775,7 @@ function vorlageLoeschen_(p) {
     const t = tab_('Vorlagen');
     const z = t.zeilen.filter(function (x) { return txt_(x.vorlage_id) === txt_(p.vorlage_id); })[0];
     if (!z) return { ok: true };
-    if (!(txt_(z.besitzer) === txt_(b.benutzer_id) || (txt_(z.typ) === 'global' && rang_(b) >= 3))) throw new Error('Keine Berechtigung.');
+    if (!(txt_(z.besitzer) === txt_(b.benutzer_id) || (txt_(z.typ) === 'global' && rang_(b) >= 3 && gleicheGruppe_(b, z.gruppe_id)))) throw new Error('Keine Berechtigung.');
     loeschen_(t, z);
     return { ok: true };
   });
@@ -1559,13 +1810,14 @@ function marktKopieren_(p) {
   const b = auth_(p, 3);
   const alt = markt_(p.markt_id);
   if (!alt) throw new Error('Markt nicht gefunden.');
+  if (!gleicheGruppe_(b, alt.gruppe_id)) throw new Error('Keine Berechtigung.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(txt_(p.datum_von))) throw new Error('Startdatum fehlt.');
   const altStart = tag_(alt.datum_von);
   const versatz = altStart ? Math.round((new Date(p.datum_von + 'T12:00:00') - new Date(altStart + 'T12:00:00')) / 864e5) : 0;
   return sperre_(function () {
     const mt = tab_('Märkte'), st = tab_('Stände'), zt = tab_('Zuständigkeiten'), ck = tab_('Checklisten'), pr = tab_('Preise');
     const mid = neueId_(mt, 'markt_id', 'MK');
-    anhaengen_(mt, [{ markt_id: mid, name: txt_(p.name) || txt_(alt.name), ort: txt_(alt.ort), datum_von: alsText_(txt_(p.datum_von)), datum_bis: alsText_(plusTage_(tag_(alt.datum_bis) || altStart, versatz) || txt_(p.datum_von)), archiviert: 'NEIN' }]);
+    anhaengen_(mt, [{ markt_id: mid, name: txt_(p.name) || txt_(alt.name), ort: txt_(alt.ort), datum_von: alsText_(txt_(p.datum_von)), datum_bis: alsText_(plusTage_(tag_(alt.datum_bis) || altStart, versatz) || txt_(p.datum_von)), archiviert: 'NEIN', gruppe_id: txt_(alt.gruppe_id) }]);
     const mv = [txt_(b.benutzer_id)].concat(verantwortliche_('markt', alt.markt_id).filter(function (id) { return id !== txt_(b.benutzer_id); })).slice(0, 2);
     mv.forEach(function (id) { verantwortlichSetzen_('markt', mid, id, b.benutzer_id); });
     const kopieCheck = function (art, altRef, neuRef) {
@@ -1597,17 +1849,60 @@ function marktKopieren_(p) {
    Einstellungen, Rückmeldungen, Bons
    =================================================================== */
 const EINSTELLBAR = ['app_titel', 'verein', 'schnellbetraege', 'storno_anzahl', 'abgleich_sekunden', 'benachrichtigung_email', 'aufgaben'];
+/* ---------- Gruppierungen (Stämme) ---------- */
+function gruppeSpeichern_(p) {
+  auth_(p, 4);
+  const name = name_(p.name);
+  if (name.length < 2) throw new Error('Name fehlt.');
+  return sperre_(function () {
+    const t = tab_('Gruppen');
+    if (t.zeilen.some(function (x) { return name_(x.name).toLowerCase() === name.toLowerCase() && txt_(x.gruppe_id) !== txt_(p.gruppe_id); })) throw new Error('Name gibt es schon.');
+    const z = txt_(p.gruppe_id) ? t.zeilen.filter(function (x) { return txt_(x.gruppe_id) === txt_(p.gruppe_id); })[0] : null;
+    if (z) { setzen_(t, z, 'name', name); return { ok: true, gruppe_id: txt_(z.gruppe_id) }; }
+    const id = neueId_(t, 'gruppe_id', 'G');
+    anhaengen_(t, [{ gruppe_id: id, name: name, sortierung: (t.zeilen.length + 1) * 10 }]);
+    return { ok: true, gruppe_id: id };
+  });
+}
+function gruppeLoeschen_(p) {
+  auth_(p, 4);
+  return sperre_(function () {
+    const t = tab_('Gruppen'), id = txt_(p.gruppe_id);
+    const z = t.zeilen.filter(function (x) { return txt_(x.gruppe_id) === id; })[0];
+    if (!z) return { ok: true };
+    if (tab_('Benutzer').zeilen.some(function (x) { return txt_(x.gruppe_id) === id && !ja_(x.entfernt); }) || tab_('Märkte').zeilen.some(function (x) { return txt_(x.gruppe_id) === id; }))
+      throw new Error('Noch Personen oder Märkte zugeordnet.');
+    loeschen_(t, z);
+    return { ok: true };
+  });
+}
+/* Wer noch keiner Gruppe angehört, wählt einmal selbst; danach ändern nur Admins */
+function gruppeWaehlen_(p) {
+  const b = auth_(p);
+  const g = gruppeGueltig_(p.gruppe_id);
+  if (!g) throw new Error('Bitte auswählen.');
+  return sperre_(function () {
+    const t = tab_('Benutzer'), z = benutzer_(b.benutzer_id);
+    if (txt_(z.gruppe_id) && rang_(z) < 4) throw new Error('Zuordnung ändern nur Admins.');
+    setzen_(t, z, 'gruppe_id', g);
+    return { ok: true, benutzer: benutzerInfo_(z) };
+  });
+}
 function einstellungenAdmin_(p) {
   auth_(p, 4);
   const e = einstellungen_(), out = {};
   EINSTELLBAR.forEach(function (k) { out[k] = txt_(e[k]).charAt(0) === '[' ? '' : txt_(e[k]); });
   if (!out.aufgaben) out.aufgaben = aufgaben_().join(';');
-  return { ok: true, einstellungen: out };
+  if (!out.schnellbetraege) out.schnellbetraege = betraege_('').join(';');
+  const zahl = {};
+  tab_('Benutzer').zeilen.forEach(function (z) { if (!ja_(z.entfernt)) zahl[txt_(z.gruppe_id)] = (zahl[txt_(z.gruppe_id)] || 0) + 1; });
+  tab_('Märkte').zeilen.forEach(function (z) { zahl['m:' + txt_(z.gruppe_id)] = (zahl['m:' + txt_(z.gruppe_id)] || 0) + 1; });
+  return { ok: true, einstellungen: out, gruppen: gruppen_().map(function (g) { return Object.assign(g, { personen: zahl[g.gruppe_id] || 0, maerkte: zahl['m:' + g.gruppe_id] || 0 }); }), ohne_gruppe: zahl[''] || 0 };
 }
 function einstellungenSpeichern_(p) {
   auth_(p, 4);
   const d = p.einstellungen || {};
-  if (d.schnellbetraege !== undefined && !/^\s*\d+(\s*;\s*\d+)*\s*$/.test(txt_(d.schnellbetraege))) throw new Error('Schnelltasten: z. B. 1;2;5;10;20;50');
+  if (d.schnellbetraege !== undefined && !/^\s*\d+([.,]\d{1,2})?(\s*;\s*\d+([.,]\d{1,2})?)*\s*$/.test(txt_(d.schnellbetraege))) throw new Error('Schnelltasten: z. B. 0,5;1;2;5;10;20;50');
   if (d.benachrichtigung_email && txt_(d.benachrichtigung_email).indexOf('@') < 1) throw new Error('E-Mail ungültig.');
   EINSTELLBAR.forEach(function (k) { if (d[k] !== undefined) einstellungSetzen_(k, txt_(d[k])); });
   return { ok: true };
@@ -1617,8 +1912,18 @@ function rueckmeldungenListe_(p) {
   const namen = namen_(), staende = {};
   tab_('Stände').zeilen.forEach(function (z) { staende[txt_(z.stand_id)] = txt_(z.name); });
   return { ok: true, rueckmeldungen: tab_('Rückmeldungen').zeilen.filter(function (z) { return txt_(z.rm_id) && (rang_(b) >= 4 || standRecht_(b, z.stand_id)); }).map(function (z) {
-    return { rm_id: txt_(z.rm_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', stand: staende[txt_(z.stand_id)] || '', typ: txt_(z.typ), text: txt_(z.text), status: txt_(z.status) || 'neu' };
+    return { rm_id: txt_(z.rm_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', stand: staende[txt_(z.stand_id)] || '', typ: txt_(z.typ), text: txt_(z.text), status: txt_(z.status) || 'neu', bild: !!txt_(z.bild) };
   }).sort(function (a, c) { return c.zeit < a.zeit ? -1 : 1; }).slice(0, 100) };
+}
+function rmBild_(p) {
+  const b = auth_(p, 2);
+  const z = tab_('Rückmeldungen').zeilen.filter(function (x) { return txt_(x.rm_id) === txt_(p.rm_id); })[0];
+  if (!z || !txt_(z.bild)) throw new Error('Kein Foto.');
+  if (!(rang_(b) >= 4 || standRecht_(b, z.stand_id))) throw new Error('Keine Berechtigung.');
+  const f = ordnerListe_(einstellungen_().rueckmeldung_ordner_id)[txt_(z.bild)];
+  if (!f) throw new Error('Foto nicht gefunden.');
+  const blob = DriveApp.getFileById(f.id).getBlob();
+  return { ok: true, mime: blob.getContentType() || 'image/jpeg', data: Utilities.base64Encode(blob.getBytes()) };
 }
 function rueckmeldungStatus_(p) {
   const b = auth_(p, 2);
@@ -1636,13 +1941,71 @@ function bonsListe_(p) {
   standPruefen_(b, p.stand_id);
   const tag = /^\d{4}-\d{2}-\d{2}$/.test(txt_(p.datum)) ? txt_(p.datum) : heute_();
   const namen = namen_(), pos = {};
-  tab_('Positionen').zeilen.forEach(function (z) {
+  spaltenLesen_(kopf_('Positionen'), ['bon_id', 'zeit', 'stand_id', 'produktname', 'menge']).forEach(function (z) {
     if (tag_(z.zeit) !== tag || txt_(z.stand_id) !== txt_(p.stand_id)) return;
     (pos[txt_(z.bon_id)] = pos[txt_(z.bon_id)] || []).push((Number(z.menge) || 0) + '× ' + txt_(z.produktname));
   });
-  return { ok: true, datum: tag, bons: tab_('Verkäufe').zeilen.filter(function (z) { return tag_(z.zeit) === tag && txt_(z.stand_id) === txt_(p.stand_id); }).map(function (z) {
+  return { ok: true, datum: tag, bons: spaltenLesen_(kopf_('Verkäufe'), ['bon_id', 'zeit', 'stand_id', 'benutzer_id', 'summe', 'status', 'art', 'hinweis', 'bestaetigt_am']).filter(function (z) { return tag_(z.zeit) === tag && txt_(z.stand_id) === txt_(p.stand_id); }).map(function (z) {
     return { bon_id: txt_(z.bon_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', summe: cent_(z.summe), status: txt_(z.status), art: txt_(z.art), hinweis: txt_(z.hinweis), bestaetigt: !!txt_(z.bestaetigt_am), positionen: (pos[txt_(z.bon_id)] || []).join(', ') };
   }).sort(function (a, c) { return c.zeit < a.zeit ? -1 : 1; }) };
+}
+
+/* ===================================================================
+   Lasttest (Admin): Schreiben wie ein Bon, Lesen wie ein Abgleich
+   =================================================================== */
+function lasttest_(p) {
+  auth_(p, 4);
+  if (p.modus === 'leeren') {
+    const sh = SpreadsheetApp.getActive().getSheetByName('Lasttest');
+    if (sh) SpreadsheetApp.getActive().deleteSheet(sh);
+    return { ok: true };
+  }
+  if (p.modus === 'lesen') {
+    const r = stammdaten_(Object.assign({}, p, { v: '', hash: '' }));
+    return { ok: !!r.ok, groesse: JSON.stringify(r).length };
+  }
+  return sperre_(function () {
+    const vk = kopf_('Verkäufe');
+    const n = spaltenLesen_(vk, ['bon_id']).length;
+    anhaengen_(kopf_('Lasttest'), [{ zeit: new Date(), nr: txt_(p.nr), daten: 'Bons: ' + n }]);
+    return { ok: true };
+  });
+}
+
+/* ===================================================================
+   Saison abschließen (Admin): Kopie des Sheets anlegen, dann alte Verkäufe
+   und erledigte Kleinigkeiten aus der Arbeitstabelle entfernen
+   =================================================================== */
+function saisonAbschliessen_(p) {
+  auth_(p, 4);
+  const bis = txt_(p.bis);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(bis) || bis >= heute_()) throw new Error('Datum vor heute wählen.');
+  return sperre_(function () {
+    const ss = SpreadsheetApp.getActive();
+    const kopie = ss.copy(ss.getName() + ' · Archiv bis ' + bis);
+    const regeln = {
+      'Verkäufe': function (z) { return tag_(z.zeit) <= bis; },
+      'Positionen': function (z) { return tag_(z.zeit) <= bis; },
+      'Zugangscodes': function (z) { return tag_(z.datum) <= bis; },
+      'Einladungen': function (z) { return tag_(z.gueltig_bis) <= bis; },
+      'Nachrichten': function (z) { return txt_(z.gelesen_am) && tag_(z.am) <= bis; }
+    };
+    const entfernt = {};
+    Object.keys(regeln).forEach(function (name) {
+      const sh = ss.getSheetByName(name);
+      if (!sh || sh.getLastRow() < 2) { entfernt[name] = 0; return; }
+      const werte = sh.getDataRange().getValues(), kopf = werte.shift().map(function (h) { return String(h).trim(); });
+      const pruefen = sh.getName() === name && kopie.getSheetByName(name) && kopie.getSheetByName(name).getLastRow() === werte.length + 1;
+      if (!pruefen) throw new Error('Kopie unvollständig (' + name + '). Nichts entfernt.');
+      const bleibt = werte.filter(function (w) { const o = {}; kopf.forEach(function (h, j) { o[h] = w[j]; }); return !regeln[name](o); });
+      entfernt[name] = werte.length - bleibt.length;
+      if (!entfernt[name]) return;
+      sh.getRange(2, 1, werte.length, kopf.length).clearContent();
+      if (bleibt.length) sh.getRange(2, 1, bleibt.length, kopf.length).setValues(bleibt.map(function (w) { return w.map(function (x) { return typeof x === 'string' && x !== '' ? "'" + x : x; }); }));
+    });
+    geschrieben_ = true;
+    return { ok: true, kopie: kopie.getUrl(), entfernt: entfernt };
+  });
 }
 
 /* ===================================================================
