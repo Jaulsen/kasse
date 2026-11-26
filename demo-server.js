@@ -1,11 +1,36 @@
 /* Demo-Modus: die echte Schnittstelle (Code.gs) läuft im Browser auf einem nachgebildeten Google Sheet. */
 (function () {
-  const KEY = 'wmk-demo-sheet-v25';
+  const UE = (() => { try { return /[?&]uebung=1/.test(location.search) ? JSON.parse(sessionStorage.getItem('wmk-uebung')) : null; } catch (e) { return null; } })();
+  const KEY = UE ? 'wmk-ueb-sheet' : 'wmk-demo-sheet-v25';
   const iso = d => new Date(d).toLocaleDateString('sv-SE');
   const heute = iso(Date.now()), morgen = iso(Date.now() + 864e5);
   const fmt = (d, o) => new Intl.DateTimeFormat('de-DE', Object.assign({ timeZone: 'Europe/Berlin' }, o)).format(d);
 
+  /* Übungsmodus: echte Produkte, ein Übungsmarkt, Beispielpersonen */
+  function seedUebung() {
+    const rollen = ['Helfer', 'Standleitung', 'Marktleitung', 'Admin'], rolle = rollen[Math.max(0, Math.min(3, (UE.rang || 1) - 1))];
+    const zeit = heute + ' 08:00-22:00; ' + morgen + ' 10:00-20:00';
+    const z = [['art', 'ref_id', 'benutzer_id', 'verantwortlich', 'erstellt_von', 'erstellt_am'], ['stand', 'S002', 'u-max', 'JA', '', new Date()]];
+    if (UE.rang >= 2) z.push(['stand', 'S001', 'u-ich', 'JA', '', new Date()]);
+    if (UE.rang >= 3) z.push(['markt', 'MK001', 'u-ich', 'JA', '', new Date()]);
+    return {
+      'Einstellungen': [['schluessel', 'wert', 'erklaerung'], ['app_titel', 'Weihnachtsmarkt-Kasse', ''], ['schnellbetraege', '0,5;1;2;5;10;20;50', ''], ['storno_anzahl', 2, ''], ['abgleich_sekunden', 60, ''], ['bilder_ordner_id', 'FB', ''], ['info_ordner_id', 'FI', ''], ['aufgaben', ['Standleitung'].concat((UE.aufgaben || []).filter(a => a !== 'Standleitung')).join(';') || 'Standleitung;Kasse', ''], ['schema', 25, '']],
+      'Kategorien': [['kategorie', 'sortierung', 'farbe', 'preis_je_markt', 'notiz']].concat((UE.kategorien || []).map(k => [k.kategorie, k.sortierung, k.farbe, 'NEIN', ''])),
+      'Produkte': [['produkt_id', 'name', 'kategorie', 'preis', 'bild', 'sortierung', 'aktiv', 'beschreibung', 'info_dateien', 'vorgeschlagen_von', 'notiz', 'pfand_id', 'suchbegriffe']]
+        .concat((UE.produkte || []).map(p => [p.produkt_id, p.name, p.kategorie, p.preis / 100, p.bild || '', p.sortierung, 'JA', p.beschreibung || '', '', '', '', p.pfand_id || '', p.suchbegriffe || ''])),
+      'Gruppen': [['gruppe_id', 'name', 'sortierung'], ['G001', 'Übung', 10]],
+      'Märkte': [['markt_id', 'name', 'ort', 'datum_von', 'datum_bis', 'archiviert', 'notiz', 'gruppe_id'], ['MK001', 'Übungsmarkt', '', heute, morgen, 'NEIN', '', 'G001']],
+      'Stände': [['stand_id', 'markt_id', 'name', 'kategorien', 'standzeiten', 'archiviert', 'notiz'], ['S001', 'MK001', 'Übungsstand', 'ALLE', zeit, 'NEIN', ''], ['S002', 'MK001', 'Zweiter Stand', 'ALLE', zeit, 'NEIN', '']],
+      'Benutzer': [['benutzer_id', 'name', 'registriert_am', 'geraet_id', 'rolle', 'aktiv', 'pin_hash', 'pin_fehler', 'pin_gesperrt_bis', 'eingeladen_von', 'entfernt', 'gruppe_id'],
+        ['u-ich', UE.name || 'Ich', new Date(), '', rolle, 'JA', '', 0, '', '', '', 'G001'], ['u-lena', 'Lena', new Date(), '', 'Helfer', 'JA', '', 0, '', '', '', 'G001'], ['u-max', 'Max', new Date(), '', 'Standleitung', 'JA', '', 0, '', '', '', 'G001'], ['u-tom', 'Tom', new Date(), 'x', 'Helfer', 'WARTET', '', 0, '', 'u-ich', '', 'G001'], ['u-zen', 'Zentrale', new Date(), 'x', 'Admin', 'JA', '', 0, '', '', '', 'G001']],
+      'Zuständigkeiten': z,
+      'Schichten': [['schicht_id', 'stand_id', 'datum', 'von', 'bis', 'aufgabe', 'benutzer_id', 'platzhalter', 'status', 'erstellt_von'],
+        ['ue1', 'S001', heute, '08:00', '22:00', 'Kasse', 'u-ich', '', 'geplant', ''], ['ue2', 'S001', heute, '10:00', '16:00', 'Kasse', 'u-lena', '', 'geplant', ''],
+        ['ue3', 'S001', heute, '16:00', '20:00', 'Kasse', '', 'Paul', 'geplant', ''], ['ue4', 'S002', heute, '16:00', '20:00', 'Kasse', 'u-lena', '', 'vorgeschlagen', '']]
+    };
+  }
   function seed() {
+    if (UE) return seedUebung();
     const sd = window.KASSE_DEMO.stammdaten;
     const zeit = heute + ' 08:00-22:00; ' + morgen + ' 10:00-20:00';
     const T = {
@@ -79,6 +104,7 @@
 
   const demoFiles = () => {
     const b = window.KASSE_DEMO.bilder, out = { FB: {}, FI: {} };
+    if (UE) (UE.produkte || []).forEach(p => { if (p.bild) out.FB[p.bild] = 'x'; });
     Object.keys(b).forEach(n => { (/detail|anleitung|info/.test(n) ? out.FI : out.FB)[n] = b[n]; });
     out.FI['Pflegeanleitung.pdf'] = 'pdf';
     return out;

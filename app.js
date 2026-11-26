@@ -1,12 +1,14 @@
-/* Weihnachtsmarkt-Kasse · App 2.5 · Kern: Zustand, Abgleich, Rahmen, Seitenleiste, Kasse */
+/* Weihnachtsmarkt-Kasse · App 2.6 · Kern: Zustand, Abgleich, Rahmen, Seitenleiste, Kasse */
 'use strict';
 
 const CFG = window.KASSE_CONFIG || {};
 const API = (CFG.API_URL || '').trim();
-const DEMO = !API;
-const APP_VERSION = '2.5';
+/* Übungsmodus: die App läuft komplett auf dem Gerät, nichts geht ins Sheet */
+const UEBUNG = (() => { try { return /[?&]uebung=1/.test(location.search) && !!sessionStorage.getItem('wmk-uebung'); } catch (e) { return false; } })();
+const DEMO = !API || UEBUNG;
+const APP_VERSION = '2.6';
 const GRUPPE = 'Stamm', GRUPPEN = 'Stämme';
-const KEY_STATE = 'wmk-v2', KEY_DATA = 'wmk-stamm-v2';
+const KEY_STATE = UEBUNG ? 'wmk-ueb' : 'wmk-v2', KEY_DATA = UEBUNG ? 'wmk-ueb-stamm' : 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
 
 /* ---------- Hilfen ---------- */
@@ -43,7 +45,7 @@ const IDB = (() => {
 const IMG = {};
 
 /* ---------- Zustand ---------- */
-const defaultState = () => ({ user: null, geraet_id: uid(), stand_id: null, bons: [], queue: [], fehlerlog: [], cart: {}, nachtrag: null, zugang: {}, letzterAbgleich: null, letzterFehler: null, schrift: 1, kachel: 2, uhr: 0, installGezeigt: false, autoStand: null });
+const defaultState = () => ({ user: null, geraet_id: uid(), stand_id: null, bons: [], queue: [], fehlerlog: [], cart: {}, nachtrag: null, korrektur: null, zugang: {}, letzterAbgleich: null, letzterFehler: null, schrift: 1, kachel: 2, uhr: 0, installGezeigt: false, autoStand: null, unscharf: false, rundgang: false });
 let S = Object.assign(defaultState(), lsGet(KEY_STATE) || {});
 if (S.anzeige && !S.schriftAlt) { S.schrift = S.anzeige; S.kachel = S.anzeige === 3 ? 3 : 2; S.schriftAlt = true; delete S.anzeige; }
 (function uebernehmen() {   // Warteschlange aus Version 1.x weiter übertragen
@@ -61,7 +63,7 @@ const OV = {};   // Fenster über der Kasse (Warenkorb, Bezahlen, Info): { titel
 const P = {};    // Seiten: { titel, eltern, body, leiste, bind, open, form }
 
 function save() { S.bons = S.bons.slice(-300); S.fehlerlog = (S.fehlerlog || []).slice(-30); lsSet(KEY_STATE, S); }
-function keepDevice() { return { geraet_id: S.geraet_id, queue: S.queue, fehlerlog: S.fehlerlog, letzterAbgleich: S.letzterAbgleich, schrift: S.schrift, kachel: S.kachel, schriftAlt: true, uhr: S.uhr, installGezeigt: S.installGezeigt }; }
+function keepDevice() { return { geraet_id: S.geraet_id, queue: S.queue, fehlerlog: S.fehlerlog, letzterAbgleich: S.letzterAbgleich, schrift: S.schrift, kachel: S.kachel, schriftAlt: true, uhr: S.uhr, installGezeigt: S.installGezeigt, unscharf: S.unscharf, rundgang: S.rundgang }; }
 
 const E = () => (D && D.einstellungen) || { schnellbetraege: [0.5, 1, 2, 5, 10, 20, 50], storno_anzahl: 2, abgleich_sekunden: 60, app_titel: 'Weihnachtsmarkt-Kasse', puffer_min: 30 };
 const KATS = () => (D && D.kategorien) || [];
@@ -359,6 +361,9 @@ const I = {
   edit: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>'),
   euro: svg('<path d="M17 6a7 7 0 1 0 0 12M4 10h9M4 14h9"/>'),
   check: svg('<path d="m5 12 5 5 9-10"/>', 2.4),
+  info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>', 2.2),
+  play: svg('<path d="M7 5v14l12-7z"/>'),
+  tool: svg('<path d="M14 6a4 4 0 0 0 5 5l-9 9-3-3 9-9a4 4 0 0 0-2-2z"/>'),
   out: svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>'),
   back: svg('<path d="m15 5-7 7 7 7"/>', 2.4),
   down: svg('<path d="m6 9 6 6 6-6"/>', 2.4),
@@ -426,11 +431,13 @@ function render() {
       <button class="iconbtn bellbtn${hinweisZahl() ? ' neu' : ''}" data-go="hinweise" aria-label="${hinweisZahl() ? hinweisZahl() + ' neue Nachrichten' : 'Nachrichten'}">${I.bell}${hinweisZahl() ? `<span class="badge">${hinweisZahl()}</span>` : ''}${fremdeHinweise().length ? `<span class="badge grau">${fremdeHinweise().length}</span>` : ''}</button>
       ${gedockt ? '' : `<button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>`}
     </header>
+    ${uebungBand()}
     ${abw ? `<div class="banner warn">Uhrzeit am Handy weicht ${abw} Min. ab</div>` : ''}
     ${main}
     ${ui.drawer || gedockt ? drawerHtml(gedockt) : ''}`;
   if (!ui.drawer) ui.drawerShown = false;
   bindMain(app);
+  bindUebungBand(app);
   app.querySelector('[data-home]').addEventListener('click', () => verlassen(home));
   app.querySelector('[data-ort]').addEventListener('click', () => { const z = ortZiel()[0]; verlassen(() => z ? go(z) : home()); });
   const bu = app.querySelector('[data-burger]');
@@ -438,6 +445,8 @@ function render() {
   app.querySelectorAll('.top [data-go]').forEach(b => b.addEventListener('click', () => verlassen(() => go(b.dataset.go))));
   if (ui.drawer || gedockt) bindDrawer(gedockt);
   renderSheet();
+  rueckgeldFenster();
+  if (ui.tour) tourZeichnen();
   const restore = (sel, v) => { const el = app.querySelector(sel); if (el && v) { el.scrollTop = v[0]; el.scrollLeft = v[1]; } };
   restore('#gw', pos.gw); restore('.filters .chips', pos.chips); restore('.drawer .dbody', pos.dr);
   if (pos.page === ui.page) restore('#pb', pos.pb);
@@ -445,6 +454,7 @@ function render() {
   render.page = ui.page; render.ov = ui.overlay;
   nachSpeichernPruefen();
   if (!S.installGezeigt && installMoeglich() && !ui.overlay && !ui.page) setTimeout(installHinweis, 800);
+  else if (!S.rundgang && !ui.tour && !UEBUNG && !ui.overlay && !ui.page && app.querySelector('.grid .tile')) setTimeout(() => { if (!S.rundgang && !ui.page && !ui.overlay) tourStarten(); }, 600);
 }
 /* Menü auf- und zuklappen, ohne die Seite neu aufzubauen (Eingaben bleiben erhalten) */
 function drawerUmschalten() {
@@ -579,13 +589,12 @@ function eintrag(name, ic, text, badge) {
 /* Seitenleiste: Bereich der eigenen Rolle oben und offen, Tieferes darunter zum Aufklappen */
 function gruppen() {
   const l = leitet(), mitStand = !!S.stand_id, r = rang();
-  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons & Storno'], ['schichten', I.clock, 'Meine Schichten'], meineAufgaben().length && ['aufgaben', I.list, 'Meine Aufgaben', meineAufgaben().length]].filter(Boolean);
+  const verkauf = [mitStand && ['kasse', I.cart, 'Kasse'], ['bons', I.receipt, 'Meine Bons'], ['schichten', I.clock, 'Meine Schichten'], meineAufgaben().length && ['aufgaben', I.list, 'Meine Aufgaben', meineAufgaben().length]].filter(Boolean);
   const eigene = STAENDE().filter(x => leitet(x.stand_id) && x.stand_id !== S.stand_id);
   // Nicht für den gewählten Stand eingeteilt: Hinweis und die eigenen Stände zum Wechseln
-  const stl = l ? [['heute', I.clock, 'Heute am Stand'], ['plan', I.cal, 'Personalplanung'], ['personal', I.users, 'Personalverwaltung'], r >= 3 && ['uebersicht', I.chart, 'Umsatz heute'],
-    ['standbons', I.receipt, 'Bons & Storno des Stands'], ['nachtrag', I.plus, 'Nachtrag erfassen'], ['checkliste', I.list, 'Checkliste'], ['standedit', I.edit, 'Stand einrichten']].filter(Boolean)
+  const stl = l ? [['heute', I.clock, 'Heute am Stand'], ['plan', I.users, 'Personal'], ['standbons', I.receipt, 'Bons verwalten'], ['checkliste', I.list, 'Checkliste'], ['standedit', I.edit, 'Stand einrichten']]
     : [['~nicht', '', S.stand_id ? 'Nicht eingeteilt für ' + standName() : 'Keinem Stand zugeordnet']].concat(eigene.slice(0, 6).map(x => ['~stand:' + x.stand_id, I.pin, x.name]));
-  const mkt = [['struktur', I.pin, 'Märkte & Stände'], ['produkte', I.tag, 'Produkte'], ['kategorien', I.list, 'Kategorien'], ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']];
+  const mkt = [['struktur', I.pin, 'Märkte & Stände'], S.stand_id && ['uebersicht', I.chart, 'Umsatz heute'], ['personen', I.users, 'Personen & Rollen'], ['rueckmeldungen', I.chat, 'Rückmeldungen']].filter(Boolean);
   if (r >= 4) mkt.push(['einstellungen', I.gear, 'Einstellungen']);
   if (r <= 1) return [{ titel: 'Verkauf & Schichten', items: verkauf }];
   if (r === 2) return [{ titel: 'Standleitung' + (l ? ' · ' + standName() : ''), items: stl }, { acc: 'verkauf', titel: 'Verkauf & Schichten', ic: I.cart, items: verkauf }];
@@ -651,14 +660,79 @@ function standWaehlen(id) {
   render(); loadImages();
 }
 function demoHtml() {
-  return `<div class="demo"><div class="row">Rolle<div class="seg">${Object.keys(ROLLEN).map(r => `<button data-role="${r}" aria-pressed="${role() === r}">${r.replace('leitung', '-L.')}</button>`).join('')}</div></div>
+  const rollen = Object.keys(ROLLEN).filter(r => !UEBUNG || ROLLEN[r] <= uebungDaten().rang);
+  if (UEBUNG) return rollen.length > 1 ? `<div class="demo"><div class="row">Rolle<div class="seg">${rollen.map(r => `<button data-role="${r}" aria-pressed="${role() === r}">${r.replace('leitung', '-L.')}</button>`).join('')}</div></div></div>` : '';
+  return `<div class="demo"><div class="row">Rolle<div class="seg">${rollen.map(r => `<button data-role="${r}" aria-pressed="${role() === r}">${r.replace('leitung', '-L.')}</button>`).join('')}</div></div>
     <div class="row">Netz<div class="seg"><button data-net="1" aria-pressed="${window.DEMO_NETZ !== false}">Online</button><button data-net="0" aria-pressed="${window.DEMO_NETZ === false}">Offline</button></div></div>
     <button class="btn ghost sm" data-dreset>Demo zurücksetzen</button></div>`;
 }
 function bindDemo(root) {
-  root.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', async () => { window.DEMO_SERVER.setRolle(S.user.benutzer_id, b.dataset.role); await sync(); render(); }));
+  root.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', async () => { if (UEBUNG && ROLLEN[b.dataset.role] > uebungDaten().rang) return; window.DEMO_SERVER.setRolle(S.user.benutzer_id, b.dataset.role); await sync(); render(); }));
   root.querySelectorAll('[data-net]').forEach(b => b.addEventListener('click', () => { window.DEMO_NETZ = b.dataset.net === '1'; if (window.DEMO_NETZ) net.ok = null; render(); sync(); }));
   const r = root.querySelector('[data-dreset]'); if (r) r.addEventListener('click', () => { window.DEMO_SERVER.reset(); localStorage.removeItem(KEY_STATE); lsSet(KEY_DATA, null); location.reload(); });
+}
+
+/* ---------- Übungsmodus: echte Produkte, Übungsmarkt, alles nur auf diesem Gerät ---------- */
+function uebungDaten() { try { return JSON.parse(sessionStorage.getItem('wmk-uebung')) || {}; } catch (e) { return {}; } }
+function uebungStarten() {
+  if (!D || !S.user) return;
+  const daten = { name: S.user.name, rang: rang(), produkte: PRODS(), kategorien: KATS(), aufgaben: D.aufgaben || [] };
+  try { sessionStorage.setItem('wmk-uebung', JSON.stringify(daten)); } catch (e) { return toast('Übung nicht möglich'); }
+  ['wmk-ueb', 'wmk-ueb-stamm', 'wmk-ueb-sheet'].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+  location.href = location.pathname + '?uebung=1';
+}
+function uebungBeenden(neu) {
+  ['wmk-ueb', 'wmk-ueb-stamm', 'wmk-ueb-sheet'].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+  if (neu) return location.reload();
+  try { sessionStorage.removeItem('wmk-uebung'); } catch (e) {}
+  location.href = location.pathname;
+}
+function uebungBand() { return UEBUNG ? `<div class="banner uebung"><span>Übung · nichts wird gespeichert</span><button data-ueneu>Neu starten</button><button data-uende>Beenden</button></div>` : ''; }
+function bindUebungBand(root) {
+  const n = root.querySelector('[data-ueneu]'); if (n) n.addEventListener('click', () => uebungBeenden(true));
+  const e = root.querySelector('[data-uende]'); if (e) e.addEventListener('click', () => uebungBeenden(false));
+}
+
+/* ---------- Rundgang: Schritt für Schritt durch die Oberfläche ---------- */
+function tourSchritte() {
+  const r = rang(), l = leitet();
+  const s = [
+    ['.where', l ? 'Dein Stand. Antippen: „Heute am Stand“ mit allem, was gerade wichtig ist.' : 'Dein Stand. Antippen: deine Schichten.'],
+    ['.grid .tile', 'Antippen = in den Warenkorb. Lange drücken = eins weniger.'],
+    ['.cell .info', 'Infos zum Produkt. Hier auch „Ausverkauft“ melden.'],
+    ['#q', 'Suchen. ≈ findet auch bei Tippfehlern.'],
+    ['[data-pay]', 'Kassieren: gegebene Scheine antippen, die App rechnet das Rückgeld. Passend? Einfach „Passend bezahlt“.'],
+    ['.lastbon, .bar .sum', 'Falsch gebucht? Den letzten Bon kannst du hier korrigieren.'],
+    ['#chip', 'Verbindung. Eine Zahl heißt: noch nicht übertragen. Ohne Netz geht alles weiter.'],
+    ['.bellbtn', r >= 2 ? 'Glocke: Freigaben, Anfragen und Nachrichten.' : 'Glocke: Nachrichten an dich.'],
+    ['[data-burger], .drawer.docked', 'Menü: Schichten, Bons, Rückmeldung, Anzeige' + (r >= 2 ? ', Personal und Bons verwalten' : '') + (r >= 3 ? ', Märkte & Stände' : '') + (r >= 4 ? ', Einstellungen' : '') + '.']
+  ];
+  if (r >= 3) s.splice(4, 0, ['[data-service]', 'Service: Produkte bearbeiten und neue anlegen. Kassieren ist dabei aus.']);
+  return s;
+}
+function tourStarten() { ui.drawer = false; ui.overlay = null; if (ui.page) { ui.page = null; try { history.pushState({ page: null }, ''); } catch (e) {} } ui.tour = { i: 0 }; S.rundgang = true; save(); render(); }
+function tourZeichnen() {
+  const alt = app.querySelector('[data-tour]'); if (alt) alt.remove();
+  const t = ui.tour; if (!t) return;
+  const schritte = tourSchritte();
+  let ziel = null;
+  while (t.i < schritte.length && !(ziel = [...app.querySelectorAll(schritte[t.i][0])].find(e => e.getBoundingClientRect().width))) t.i++;
+  const ende = t.i >= schritte.length;
+  const a = app.getBoundingClientRect(), r = ziel ? ziel.getBoundingClientRect() : null;
+  const loch = r ? `<div class="tourloch" style="left:${r.left - a.left - 6}px;top:${r.top - a.top - 6}px;width:${r.width + 12}px;height:${r.height + 12}px"></div>` : '<div class="tourloch voll"></div>';
+  const unten = r && (r.top - a.top) < a.height / 2;
+  const pos = r ? (unten ? `top:${Math.min(r.bottom - a.top + 16, a.height - 200)}px` : `bottom:${a.bottom - r.top + 16}px`) : 'top:30%';
+  app.insertAdjacentHTML('beforeend', `<div class="tour" data-tour>${loch}<div class="tourbox" style="${pos}">
+    ${ende ? `<b>Fertig</b><p>${UEBUNG ? 'Probier alles aus, es wird nichts gespeichert.' : 'Ausprobieren ohne Risiko: im Übungsmodus.'}</p>` : `<small>${t.i + 1} / ${schritte.length}</small><p>${esc(schritte[t.i][1])}</p>`}
+    <div class="acts">${ende ? `<button class="btn ghost sm" data-tz="ende">Schließen</button>${!UEBUNG ? '<button class="btn sm" style="margin-left:auto" data-tz="ueben">Jetzt üben</button>' : ''}`
+      : `<button class="btn ghost sm" data-tz="ende">Überspringen</button><button class="btn sm" style="margin-left:auto" data-tz="weiter">Weiter</button>`}</div></div></div>`);
+  const el = app.querySelector('[data-tour]');
+  el.querySelectorAll('[data-tz]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.tz;
+    if (k === 'weiter') { t.i++; return tourZeichnen(); }
+    ui.tour = null; el.remove();
+    if (k === 'ueben') uebungStarten();
+  }));
 }
 
 /* ---------- Fenster über der Kasse ---------- */
@@ -862,7 +936,14 @@ async function redeem(code) {
 }
 
 /* ---------- Kasse ---------- */
+const darfService = () => rang() >= 3;
 function zelleHtml(p, st) {
+  if (ui.service) {
+    const src = p.bild ? imgUrl('bilder', p.bild) : '';
+    return `<div class="cell" data-cell="${esc(p.produkt_id)}"><button class="tile${p.aktiv === false ? ' out' : ''}" data-p="${esc(p.produkt_id)}" aria-label="${esc(p.name)} bearbeiten">
+      <span class="pic" style="background:${esc(kat(p.kategorie).farbe || '#5E6A61')}">${src ? `<img src="${src}" alt="">` : esc(initials(p.name))}${p.aktiv === false ? '<span class="tag">deaktiviert</span>' : ''}</span>
+      <span class="tx"><span class="nm">${esc(p.name)}</span><span class="pr num">${eur(p.preis)}</span></span></button></div>`;
+  }
   const n = S.cart[p.produkt_id] || 0, pr = preis(p, st);
   const av = availOf(st.stand_id, p.produkt_id), out = av !== 'verfuegbar';
   const src = p.bild ? imgUrl('bilder', p.bild) : '';
@@ -874,6 +955,7 @@ function zelleHtml(p, st) {
 }
 function bindZelle(c) {
   const t = c.querySelector('.tile'), pid = t.dataset.p;
+  if (ui.service) { t.addEventListener('click', () => openProdukt(pid, null)); return; }
   let timer = null, long = false;
   t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { long = true; change(pid, -1); }, 480); });
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => t.addEventListener(ev, () => clearTimeout(timer)));
@@ -884,40 +966,74 @@ function bindZelle(c) {
 }
 /* Letzter eigener Bon an diesem Stand (zum Korrigieren) */
 function letzterBon() {
-  if (S.nachtrag) return null;
+  if (S.nachtrag || S.korrektur) return null;
   const b = myBons()[0];
   if (!b || b.stand_id !== S.stand_id || b.status !== 'ok' || !stornoable().includes(b.bon_id) || Date.now() - new Date(b.zeit).getTime() > 20 * 60000) return null;
   return b;
 }
 function fussHtml() {
-  const total = cartTotal(), count = cartCount(), payout = total < 0, lb = letzterBon();
+  if (ui.service) return '';
+  const total = cartTotal(), count = cartCount(), payout = total < 0, lb = letzterBon(), modus = S.nachtrag || S.korrektur;
   return `${lb && !count ? `<div class="lastbon"><span class="num">Letzter Bon ${eur(lb.summe)} · ${fmtClock(lb.zeit)}</span><button class="mini-btn" data-korr="${esc(lb.bon_id)}">Korrigieren</button></div>` : ''}
   <div class="bar">
     <button class="sum${payout ? ' payout' : ''}" data-cart ${count ? '' : 'disabled'}>
       <small>${payout ? 'Auszahlung · ' : ''}${count} Artikel</small>
       <b class="num">${payout ? '↑ ' + eur(-total) : eur(total)}</b>
     </button>
-    <button class="btn${payout && !S.nachtrag ? ' payout' : ''}" data-pay ${count ? '' : 'disabled'}>${S.nachtrag ? 'Speichern' : payout ? 'Auszahlen' : 'Kassieren'}</button>
+    <button class="btn${payout && !modus ? ' payout' : ''}" data-pay ${count ? '' : 'disabled'}>${modus ? 'Speichern' : payout ? 'Auszahlen' : 'Kassieren'}</button>
   </div>`;
 }
 function bindFuss(root) {
-  root.querySelector('[data-cart]').addEventListener('click', () => go('cart'));
-  root.querySelector('[data-pay]').addEventListener('click', () => S.nachtrag ? saveBon() : go('pay'));
-  const k = root.querySelector('[data-korr]'); if (k) k.addEventListener('click', () => { ui.korr = k.dataset.korr; go('korrigieren'); });
+  const c = root.querySelector('[data-cart]'); if (!c) return;
+  c.addEventListener('click', () => go('cart'));
+  root.querySelector('[data-pay]').addEventListener('click', () => S.nachtrag || S.korrektur ? saveBon() : go('pay'));
+  const k = root.querySelector('[data-korr]'); if (k) k.addEventListener('click', () => { ui.korr = { bon_id: k.dataset.korr }; go('korrigieren'); });
 }
-function rgeldHtml() {
-  const r = ui.rueckgeld; if (!r) return '';
-  return `<button class="rgeld${r.aus ? ' aus' : ''}" data-rgeld>${r.aus ? `<small>Auszahlen</small><b class="num">↑ ${eur(r.betrag)}</b>` : `<small>Rückgeld · gegeben ${eur(r.gegeben)}</small><b class="num">${eur(r.betrag)}</b>`}</button>`;
+/* Rückgeld als Fenster: schließt bei der nächsten Berührung */
+function rueckgeldFenster() {
+  const r = ui.rueckgeld; if (!r || ui.page || ui.overlay || !app.querySelector('#kf')) return;
+  app.insertAdjacentHTML('beforeend', `<div class="rgpop" data-rgpop role="status"><div class="rgkarte${r.aus ? ' aus' : r.diff ? ' diff' : ''}">${r.aus ? `<small>Auszahlen</small><b class="num">↑ ${eur(r.betrag)}</b>`
+    : r.diff ? `<small>${r.betrag > 0 ? 'Nachkassieren' : 'Zurückgeben'}</small><b class="num">${eur(Math.abs(r.betrag))}</b>`
+    : `<small>Rückgeld</small><b class="num">${eur(r.betrag)}</b><span class="num">gegeben ${eur(r.gegeben)}</span>`}</div></div>`);
+  const el = app.querySelector('[data-rgpop]');
+  const zu = e => { e.preventDefault(); e.stopPropagation(); ui.rueckgeld = null; el.remove(); };
+  el.addEventListener('pointerdown', zu); el.addEventListener('click', zu);
+}
+/* Suche: Name, Suchbegriffe, Beschreibung, Kategorie; unscharf auch mit Tippfehlern */
+const norm = t => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9 ]+/g, ' ');
+function abstand(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 9;
+  // Levenshtein mit Vertauschung (Damerau, eingeschränkt)
+  const m = a.length, n = b.length, d = Array.from({ length: m + 1 }, (_, i) => { const r = new Array(n + 1).fill(0); r[0] = i; return r; });
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
+    const k = a[i - 1] === b[j - 1] ? 0 : 1;
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + k);
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+  }
+  return d[m][n];
+}
+function trifft(p, q) {
+  const text = norm([p.name, p.suchbegriffe, p.beschreibung, p.kategorie].join(' ')), w = norm(q).trim().split(/\s+/).filter(Boolean);
+  if (!w.length) return true;
+  if (w.every(x => text.includes(x))) return true;
+  if (!S.unscharf) return false;
+  const woerter = text.split(/\s+/).filter(Boolean);
+  return w.every(x => text.includes(x) || woerter.some(y => { const erl = x.length >= 7 ? 2 : x.length >= 4 ? 1 : 0; return erl && (abstand(x, y) <= erl || abstand(x, y.slice(0, x.length)) <= erl); }));
+}
+function serviceProdukte() {
+  const alle = (L.produkte && L.produkte.produkte) || PRODS().map(p => Object.assign({ aktiv: true }, p));
+  return alle.filter(p => !p.vorschlag).slice().sort((a, b) => kat(a.kategorie).sortierung - kat(b.kategorie).sortierung || a.kategorie.localeCompare(b.kategorie) || ((a.aktiv === false) - (b.aktiv === false)) || a.sortierung - b.sortierung || a.name.localeCompare(b.name));
 }
 function kasse() {
   const st = stand();
-  const sortiment = sortimentFor(st);
+  const sortiment = ui.service ? serviceProdukte() : sortimentFor(st);
   const cats = [...new Set(sortiment.map(p => p.kategorie))];
   if (ui.kat !== 'Alle' && !cats.includes(ui.kat)) ui.kat = 'Alle';
   const lt = leitet();
-  let items = sortiment.filter(p => lt || availOf(st.stand_id, p.produkt_id) !== 'nicht_da');
-  const q = ui.q.trim().toLowerCase();
-  if (q) items = items.filter(p => p.name.toLowerCase().includes(q));
+  let items = ui.service ? sortiment : sortiment.filter(p => lt || availOf(st.stand_id, p.produkt_id) !== 'nicht_da');
+  const q = ui.q.trim();
+  if (q) items = items.filter(p => trifft(p, q));
   else if (ui.kat !== 'Alle') items = items.filter(p => p.kategorie === ui.kat);
   let grid = '', last = null;
   const grouped = !q && ui.kat === 'Alle' && cats.length > 1;
@@ -926,24 +1042,29 @@ function kasse() {
     grid += zelleHtml(p, st);
   }
   if (!items.length) grid = listeLeer(q ? 'Nichts gefunden' : 'Keine Produkte');
-  const ausserhalb = !S.nachtrag && !inStandzeit(st);
+  const ausserhalb = !S.nachtrag && !S.korrektur && !ui.service && !inStandzeit(st);
   const html = `
   ${S.nachtrag ? `<div class="banner"><span>Nachtrag · ${fmtTime(S.nachtrag.zeit)}</span><button data-endnt>Beenden</button></div>` : ''}
+  ${S.korrektur ? `<div class="banner korr"><span>Korrektur · Bon ${eur(S.korrektur.summe)} von ${fmtClock(S.korrektur.zeit)}</span><button data-endkorr>Abbrechen</button></div>` : ''}
   ${ausserhalb ? '<div class="banner">Außerhalb der Standzeit</div>' : ''}
   <div class="filters">
-    <label class="search">${I.search}<input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}" aria-label="Produkt suchen"></label>
+    <div class="suchzeile"><label class="search">${I.search}<input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}" aria-label="Produkt suchen"><button class="unscharf" data-unscharf aria-pressed="${!!S.unscharf}" aria-label="Unscharfe Suche" title="Unscharf suchen">≈</button></label>
+      ${darfService() ? `<button class="servicebtn" data-service aria-pressed="${!!ui.service}">${I.gear}<span>Service</span></button>` : ''}</div>
     <div class="chips" role="toolbar" aria-label="Kategorien">${['Alle', ...cats].map(c => `<button class="chip" data-k="${esc(c)}" aria-pressed="${!q && ui.kat === c}">${esc(c)}</button>`).join('')}</div>
   </div>
-  <div class="gridwrap" id="gw">${rgeldHtml()}<div class="grid">${grid}</div></div>
+  <div class="gridwrap${ui.service ? ' service' : ''}" id="gw">${ui.service ? `<button class="neuprod" data-neuprod>${I.plus}<span>Neues Produkt</span></button>` : ''}<div class="grid">${grid}</div></div>
   <div class="kfuss" id="kf">${fussHtml()}</div>`;
   return [html, root => {
     const qi = root.querySelector('#q');
     qi.addEventListener('input', () => { ui.q = qi.value; const pos = qi.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); });
+    root.querySelector('[data-unscharf]').addEventListener('click', e => { e.preventDefault(); S.unscharf = !S.unscharf; render(); });
     root.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => { ui.kat = b.dataset.k; ui.q = ''; render(); document.getElementById('gw').scrollTop = 0; }));
     root.querySelectorAll('.cell[data-cell]').forEach(bindZelle);
     bindFuss(root);
-    const rg = root.querySelector('[data-rgeld]'); if (rg) rg.addEventListener('click', () => { ui.rueckgeld = null; rg.remove(); });
+    const sv = root.querySelector('[data-service]'); if (sv) sv.addEventListener('click', () => { ui.service = !ui.service; ui.kat = 'Alle'; if (ui.service) produkteLaden().then(() => { if (ui.service && !ui.page) render(); }); render(); });
+    const np = root.querySelector('[data-neuprod]'); if (np) np.addEventListener('click', () => openProdukt(null, null));
     const nt = root.querySelector('[data-endnt]'); if (nt) nt.addEventListener('click', () => { S.nachtrag = null; S.cart = {}; render(); });
+    const ek = root.querySelector('[data-endkorr]'); if (ek) ek.addEventListener('click', () => { S.korrektur = null; S.cart = {}; render(); });
   }];
 }
 /* Nur die getippte Kachel und die Summe neu zeichnen: schnell auch auf älteren Handys */
@@ -951,7 +1072,6 @@ function kasseAktualisieren(pids) {
   const kf = app.querySelector('#kf');
   if (ui.page || ui.overlay || !kf || !S.stand_id || app.querySelector('[data-scrim], [data-ov]')) return render();
   const st = stand();
-  const rg = app.querySelector('[data-rgeld]'); if (rg) { rg.remove(); ui.rueckgeld = null; }
   [...new Set(pids.filter(Boolean))].forEach(pid => {
     const c = app.querySelector(`.cell[data-cell="${CSS.escape(pid)}"]`), p = prod(pid);
     if (!c || !p) return;
@@ -992,32 +1112,36 @@ function bindLines(root) {
 OV.cart = {
   titel: () => 'Warenkorb',
   body: () => { const t = cartTotal(); return cartLines().length ? linesHtml() + `<div class="line" style="border:0"><div class="n"><b>${t < 0 ? 'Auszahlen' : 'Summe'}</b></div><div class="ls num${t < 0 ? ' neg' : ''}" style="font-size:20px">${eur(Math.abs(t))}</div></div>` : listeLeer('Leer'); },
-  footer: () => `<button class="btn ghost" data-x="clear">Leeren</button><button class="btn${cartTotal() < 0 && !S.nachtrag ? ' payout' : ''}" style="flex:1" data-x="topay">${S.nachtrag ? 'Speichern' : cartTotal() < 0 ? 'Auszahlen' : 'Kassieren'}</button>`,
+  footer: () => { const m = S.nachtrag || S.korrektur; return `<button class="btn ghost" data-x="clear">Leeren</button><button class="btn${cartTotal() < 0 && !m ? ' payout' : ''}" style="flex:1" data-x="topay">${m ? 'Speichern' : cartTotal() < 0 ? 'Auszahlen' : 'Kassieren'}</button>`; },
   bind: root => {
     bindLines(root);
     root.querySelector('[data-x="clear"]').addEventListener('click', () => { S.cart = {}; ui.overlay = null; render(); });
-    root.querySelector('[data-x="topay"]').addEventListener('click', () => { if (S.nachtrag) saveBon(); else go('pay'); });
+    root.querySelector('[data-x="topay"]').addEventListener('click', () => { if (S.nachtrag || S.korrektur) saveBon(); else go('pay'); });
   }
 };
 
 const scheinText = v => v < 1 ? Math.round(v * 100) + ' ct' : (Number.isInteger(v) ? v : v.toFixed(2).replace('.', ',')) + ' €';
+/* Bezahlen als Rechnung: gegeben − zu zahlen = Rückgeld / es fehlt (feste Höhe, nichts verschiebt sich) */
+function rechnungHtml() {
+  const total = cartTotal(), g = ui.payGiven;
+  if (g == null) return `<div class="rechnung"><div class="rz mitte"><small>Zu zahlen</small><b class="num">${eur(total)}</b></div></div>`;
+  const rest = g - total;
+  return `<div class="rechnung voll"><div class="rz"><small>Gegeben</small><b class="num">${eur(g)}</b></div><span class="op">−</span>
+    <div class="rz"><small>Zu zahlen</small><b class="num">${eur(total)}</b></div><span class="op">=</span>
+    <div class="rz ${rest < 0 ? 'fehlt' : 'zurueck'}"><small>${rest < 0 ? 'Es fehlt' : 'Rückgeld'}</small><b class="num">${eur(Math.abs(rest))}</b></div></div>`;
+}
 OV.pay = {
   open: () => { ui.payGiven = null; ui.payParts = []; ui.payInput = ''; },
   titel: () => cartTotal() < 0 ? 'Auszahlen' : 'Kassieren',
   body: () => {
-    const total = cartTotal(), payout = total < 0, given = ui.payGiven;
-    let change = '';
-    if (!payout && given != null) change = given < total ? `<div class="change short"><small>Es fehlen</small><b class="num">${eur(total - given)}</b></div>` : `<div class="change"><small>Rückgeld</small><b class="num">${eur(given - total)}</b></div>`;
+    const total = cartTotal(), payout = total < 0;
     const notes = (E().schnellbetraege || [0.5, 1, 2, 5, 10, 20, 50]).slice().sort((a, b) => a - b);
     return `${linesHtml()}
       ${payout ? `<div class="due payout"><small>Auszahlen</small><b class="num">↑ ${eur(-total)}</b></div>`
-      : `<div class="due"><small>Zu zahlen</small><b class="num">${eur(total)}</b></div>
-      <div class="field"><label>Gegeben</label>
-        <div class="cash">${notes.map(v => { const c = Math.round(v * 100), n = ui.payParts.filter(x => x === c).length; return `<button data-g="${c}">${scheinText(v)}${n ? `<span class="cnt">${n}×</span>` : ''}</button>`; }).join('')}</div>
-        ${given != null ? `<div class="givenrow"><span class="num"><b>${eur(given)}</b>${ui.payParts.length > 1 ? ' (' + ui.payParts.map(x => eur(x)).join(' + ') + ')' : ''}</span>
-          <span>${ui.payParts.length ? `<button class="mini-btn" data-x="undo" aria-label="Letzten Betrag entfernen">↶</button>` : ''}<button class="mini-btn" data-x="reset">Zurücksetzen</button></span></div>` : ''}</div>
-      <div class="field"><input id="g-in" inputmode="decimal" placeholder="Betrag" aria-label="Gegebener Betrag" value="${esc(ui.payInput)}"></div>
-      ${change}`}`;
+      : `${rechnungHtml()}
+      <div class="cash">${notes.map(v => { const c = Math.round(v * 100), n = ui.payParts.filter(x => x === c).length; return `<button data-g="${c}">${scheinText(v)}${n ? `<span class="cnt">${n}×</span>` : ''}</button>`; }).join('')}</div>
+      <div class="givenrow"><input id="g-in" inputmode="decimal" placeholder="Betrag" aria-label="Gegebener Betrag" value="${esc(ui.payInput)}">
+        <span>${ui.payParts.length ? `<button class="mini-btn" data-x="undo" aria-label="Letzten Betrag entfernen">↶</button>` : ''}${ui.payGiven != null ? '<button class="mini-btn" data-x="reset">Zurücksetzen</button>' : ''}</span></div>`}`;
   },
   footer: () => {
     const t = cartTotal(), short = t >= 0 && ui.payGiven != null && ui.payGiven < t;
@@ -1037,32 +1161,43 @@ OV.pay = {
 
 function saveBon() {
   const lines = cartLines(); if (!lines.length) return;
-  const total = cartTotal(), nt = S.nachtrag;
-  const gegeben = nt ? null : (total < 0 ? 0 : (ui.payGiven == null ? total : ui.payGiven));
+  const total = cartTotal(), nt = S.nachtrag, ko = S.korrektur;
+  const gegeben = nt || ko ? null : (total < 0 ? 0 : (ui.payGiven == null ? total : ui.payGiven));
   const bon = {
-    bon_id: uid(), zeit: nt ? nt.zeit : jetzt().toISOString(), stand_id: nt ? nt.stand_id : S.stand_id,
+    bon_id: uid(), zeit: nt ? nt.zeit : ko ? ko.zeit : jetzt().toISOString(), stand_id: nt ? nt.stand_id : ko ? ko.stand_id : S.stand_id,
     benutzer_id: S.user.benutzer_id, geraet_id: S.geraet_id, anzahl_artikel: cartCount(), summe: total,
-    gegeben, rueckgeld: nt ? null : (total < 0 ? -total : gegeben - total),
-    status: 'ok', art: nt ? 'nachtrag' : 'kasse',
+    gegeben, rueckgeld: nt || ko ? null : (total < 0 ? -total : gegeben - total),
+    status: 'ok', art: nt ? 'nachtrag' : 'kasse', korrektur_von: ko ? ko.bon_id : '',
     positionen: lines.map((l, i) => ({ pos_nr: i + 1, produkt_id: l.p.produkt_id, produktname: l.p.name, kategorie: l.p.kategorie, einzelpreis: l.einzel, menge: l.menge, zeilensumme: l.summe }))
   };
+  // Korrektur: erst jetzt den alten Bon stornieren
+  if (ko) stornoEnqueue(ko.bon_id, true);
   S.bons.push(bon);
-  S.cart = {}; ui.overlay = null;
-  ui.rueckgeld = nt ? null : total < 0 ? { aus: true, betrag: -total } : bon.rueckgeld > 0 ? { betrag: bon.rueckgeld, gegeben: ui.payGiven } : null;
+  S.cart = {}; ui.overlay = null; S.nachtrag = null; S.korrektur = null;
+  ui.rueckgeld = nt ? null : ko ? (total !== ko.summe ? { diff: true, betrag: total - ko.summe } : null) : total < 0 ? { aus: true, betrag: -total } : bon.rueckgeld > 0 ? { betrag: bon.rueckgeld, gegeben: ui.payGiven } : null;
+  if (nt) S.nachtrag = nt;   // Nachtrag: mehrere Bons nacheinander
   enqueue('Bon', bon);
+  if (ko && ko.zurueck) { const r = ui.rueckgeld; ui.rueckgeld = null; go(ko.zurueck); toast(r ? 'Korrigiert · ' + eur(Math.abs(r.betrag)) + (r.betrag > 0 ? ' nachkassieren' : ' zurückgeben') : 'Korrigiert'); return; }
   render();
   if (nt) toast(`Nachtrag ${eur(total)}`);
+  else if (ko && !ui.rueckgeld) toast('Korrigiert');
 }
-/* Letzten Bon korrigieren: stornieren und Inhalt zurück in den Warenkorb */
+/* Bon korrigieren: Inhalt in den Warenkorb, beim Speichern wird der alte storniert; die Uhrzeit bleibt */
+function korrekturStarten(b, zurueck) {
+  S.cart = {};
+  (b.pos || b.positionen || []).forEach(p => { if (prod(p.produkt_id)) S.cart[p.produkt_id] = (S.cart[p.produkt_id] || 0) + p.menge; });
+  S.korrektur = { bon_id: b.bon_id, zeit: b.zeit, stand_id: b.stand_id || S.stand_id, summe: b.summe, zurueck: zurueck || null };
+  S.nachtrag = null; ui.rueckgeld = null; ui.service = false; ui.overlay = null;
+  if (S.stand_id !== S.korrektur.stand_id) S.stand_id = S.korrektur.stand_id;
+  home();
+}
 OV.korrigieren = {
   titel: () => 'Bon korrigieren?',
-  body: () => { const b = S.bons.find(x => x.bon_id === ui.korr); return b ? `<p style="margin:0;font-size:18px"><b class="num">${eur(b.summe)}</b> · ${fmtClock(b.zeit)}</p><span class="muted">${esc(b.positionen.map(p => p.menge + '× ' + p.produktname).join(', '))}</span>` : ''; },
-  footer: () => `<button class="btn ghost" data-close>Abbrechen</button><button class="btn" style="flex:1" data-x="ja">Stornieren und ändern</button>`,
+  body: () => { const b = ui.korr && (ui.korr.bon || S.bons.find(x => x.bon_id === ui.korr.bon_id)); return b ? `<p style="margin:0;font-size:18px"><b class="num">${eur(b.summe)}</b> · ${fmtClock(b.zeit)}</p><span class="muted">${esc(typeof b.positionen === 'string' ? b.positionen : b.positionen.map(p => p.menge + '× ' + p.produktname).join(', '))}</span>` : ''; },
+  footer: () => `<button class="btn ghost" data-close>Abbrechen</button><button class="btn" style="flex:1" data-x="ja">Ändern</button>`,
   bind: root => root.querySelector('[data-x="ja"]').addEventListener('click', () => {
-    const b = S.bons.find(x => x.bon_id === ui.korr); if (!b) return closeOverlay();
-    stornoEnqueue(b.bon_id, true);
-    S.cart = {}; b.positionen.forEach(p => { if (prod(p.produkt_id)) S.cart[p.produkt_id] = (S.cart[p.produkt_id] || 0) + p.menge; });
-    ui.rueckgeld = null; ui.overlay = null; render(); toast('Storniert · im Warenkorb');
+    const b = ui.korr && (ui.korr.bon || S.bons.find(x => x.bon_id === ui.korr.bon_id)); if (!b) return closeOverlay();
+    korrekturStarten(b, ui.korr.zurueck);
   })
 };
 
@@ -1131,10 +1266,13 @@ let wakeLock = null;
 async function keepAwake() { try { if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch (e) {} }
 
 window.addEventListener('DOMContentLoaded', async () => {
-  if (!DEMO) Object.assign(IMG, await IDB.all());
+  if (!DEMO || UEBUNG) Object.assign(IMG, await IDB.all());
   if (S.user && !S.user.status) S.user = null;
   if (D && !Array.isArray(D.hinweise)) D.hinweise = [];
   try { history.replaceState({ page: null }, ''); } catch (e) {}
+  if (UEBUNG && !S.user) {
+    try { const r = await api({ aktion: 'anmelden', name: uebungDaten().name, pin: '0000' }, true); if (r.ok) return angemeldet(r.benutzer); } catch (e) {}
+  }
   render();
   if (S.user || S.queue.length) sync();
   // Abgleich: Leitungen öfter (Hinweise), wer nur kassiert seltener; Bons gehen trotzdem sofort raus

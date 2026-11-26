@@ -1,4 +1,4 @@
-/* Weihnachtsmarkt-Kasse · App 2.5 · Stand einrichten, Marktleitung, Admin */
+/* Weihnachtsmarkt-Kasse · App 2.6 · Stand einrichten, Marktleitung, Admin */
 'use strict';
 
 /* ---------- Verantwortliche (Stand und Markt) ---------- */
@@ -241,12 +241,12 @@ P.kopieren = {
 /* ---------- Produkte ---------- */
 const produkteLaden = () => laden('produkte', { aktion: 'produkte_admin' });
 P.produkte = {
-  key: 'produkte',
-  titel: 'Produkte',
+  key: 'produkte', eltern: 'einstellungen',
+  titel: 'Alle Produkte',
   open: () => { ui.pq = ui.pq || ''; produkteLaden(); },
   body: () => `<label class="search">${I.search}<input id="pq" type="search" placeholder="Suchen" value="${esc(ui.pq)}" aria-label="Produkt suchen"></label>` + geladen('produkte', x => {
     const q = ui.pq.toLowerCase();
-    const l = x.produkte.filter(p => !q || p.name.toLowerCase().includes(q) || p.kategorie.toLowerCase().includes(q))
+    const l = x.produkte.filter(p => !q || trifft(p, q))
       .sort((a, b) => (b.vorschlag - a.vorschlag) || kat(a.kategorie).sortierung - kat(b.kategorie).sortierung || a.sortierung - b.sortierung || a.name.localeCompare(b.name));
     let last = null;
     return `<div class="plist">${l.map(p => { const h = !q && !p.vorschlag && p.kategorie !== last ? `<h3 class="sub">${esc(p.kategorie)}</h3>` : ''; if (!p.vorschlag) last = p.kategorie;
@@ -266,7 +266,7 @@ function openProdukt(pid, eltern) {
   if (pid) {
     const liste = (L.produkte && L.produkte.produkte) || [];
     p = liste.find(x => x.produkt_id === pid);
-    if (!p) { const d = prod(pid); if (!d) return; p = { produkt_id: d.produkt_id, name: d.name, kategorie: d.kategorie, preis: d.preis, bild: d.bild, sortierung: d.sortierung, aktiv: true, beschreibung: d.beschreibung, info_dateien: (d.info || []).map(i => i.name), verantwortlich_id: d.verantwortlich_id, verantwortlich_platzhalter: d.verantwortlich_id ? '' : d.verantwortlich, pfand_id: d.pfand_id || '' }; }
+    if (!p) { const d = prod(pid); if (!d) return; p = { produkt_id: d.produkt_id, name: d.name, kategorie: d.kategorie, preis: d.preis, bild: d.bild, sortierung: d.sortierung, aktiv: true, beschreibung: d.beschreibung, info_dateien: (d.info || []).map(i => i.name), verantwortlich_id: d.verantwortlich_id, verantwortlich_platzhalter: d.verantwortlich_id ? '' : d.verantwortlich, pfand_id: d.pfand_id || '', suchbegriffe: d.suchbegriffe || '', verantwortlich: d.verantwortlich || '' }; }
   }
   ui.pe = p ? Object.assign({}, p, { info_dateien: p.info_dateien.slice() }) : { produkt_id: '', name: '', kategorie: (KATS()[0] || {}).kategorie || '', preis: 0, sortierung: 0, aktiv: true, beschreibung: '', info_dateien: [] };
   ui.pe.neuBild = null; ui.pe.neuDateien = []; ui.pe.eltern = eltern;
@@ -301,10 +301,11 @@ P.produkt = {
       <div class="formrow"><div class="field"><label for="pe-k">Kategorie</label><select id="pe-k">${optionen(KATS().map(k => k.kategorie), p.kategorie)}</select></div>
         <div class="field"><label for="pe-p">Preis €</label><input id="pe-p" inputmode="decimal" value="${(p.preis / 100).toFixed(2).replace('.', ',')}"></div></div>
       <div class="field"><label>Produktverantwortlich</label><div class="seg" id="pe-vm"><button data-vm="b" aria-pressed="${vm === 'b'}">Person</button><button data-vm="p" aria-pressed="${vm === 'p'}">Platzhalter</button></div>
-        ${vm === 'b' ? `<select id="pe-v" aria-label="Verantwortlich">${optionen([['', 'niemand']].concat((D.personen || []).map(x => [x.benutzer_id, x.name])), p.verantwortlich_id || '')}</select>`
+        ${vm === 'b' ? `<select id="pe-v" aria-label="Verantwortlich">${optionen([['', 'niemand']].concat((D.personen || []).map(x => [x.benutzer_id, x.name]), p.verantwortlich_id && !(D.personen || []).some(x => x.benutzer_id === p.verantwortlich_id) ? [[p.verantwortlich_id, p.verantwortlich || 'bisherige Person']] : []), p.verantwortlich_id || '')}</select>`
           : `<input id="pe-vp" value="${esc(p.verantwortlich_platzhalter || '')}" placeholder="Name" aria-label="Platzhalter">`}</div>`
       : `<div class="card"><b>${esc(p.name)}</b><span class="muted">${esc(p.kategorie)} · ${eur(p.preis)}</span><span class="muted">${(prod(p.produkt_id) || {}).verantwortlich_id === S.user.benutzer_id || rang() >= 4 ? 'Du bist verantwortlich: Änderungen gelten sofort.' : 'Bild und Beschreibung werden nach Bestätigung durch die Produktverantwortlichen übernommen.'}</span></div>`}
-      ${ml ? `<div class="formrow"><div class="field"><label for="pe-s">Sortierung</label><input id="pe-s" inputmode="numeric" value="${p.sortierung}"></div><label class="check" style="align-self:end"><input type="checkbox" id="pe-a" ${p.aktiv ? 'checked' : ''}> Aktiv</label></div>
+      ${ml ? `<div class="formrow">${rang() >= 4 ? `<div class="field"><label for="pe-s">Sortierung</label><input id="pe-s" inputmode="numeric" value="${p.sortierung}"></div>` : ''}<label class="check" style="align-self:end"><input type="checkbox" id="pe-a" ${p.aktiv ? 'checked' : ''}> Aktiv</label></div>
+      <div class="field"><label for="pe-sb">Suchbegriffe</label><input id="pe-sb" value="${esc(p.suchbegriffe || '')}" autocomplete="off"></div>
       <div class="field"><label for="pe-pf">Pfand dazu</label><select id="pe-pf">${optionen([['', 'kein Pfand']].concat(pfandListe(p).map(x => [x.produkt_id, x.name + ' · ' + eur(x.preis)])), p.pfand_id || '')}</select></div>` : ''}
       <div class="field"><label for="pe-b">Beschreibung</label><textarea id="pe-b" rows="3">${esc(p.beschreibung)}</textarea></div>
       <div class="field"><label>Bild</label><div class="imgedit">${src ? `<img src="${src}" alt="">` : '<span class="ph">kein Bild</span>'}<label class="mini-btn">Wählen<input type="file" accept="image/*" id="pe-i" hidden></label></div></div>
@@ -322,7 +323,8 @@ P.produkt = {
         if (root.querySelector('#pe-v')) { p.verantwortlich_id = val(root, '#pe-v'); p.verantwortlich_platzhalter = ''; }
         if (root.querySelector('#pe-vp')) { p.verantwortlich_platzhalter = val(root, '#pe-vp'); p.verantwortlich_id = ''; }
       }
-      if (root.querySelector('#pe-s')) { p.sortierung = Number(val(root, '#pe-s')) || 0; p.aktiv = root.querySelector('#pe-a').checked; p.pfand_id = val(root, '#pe-pf'); }
+      if (root.querySelector('#pe-a')) { p.aktiv = root.querySelector('#pe-a').checked; p.pfand_id = val(root, '#pe-pf'); p.suchbegriffe = val(root, '#pe-sb'); }
+      if (root.querySelector('#pe-s')) p.sortierung = Number(val(root, '#pe-s')) || 0;
     };
     root.querySelectorAll('#pe-vm button').forEach(b => b.addEventListener('click', () => { erfassen(); p.vmodus = b.dataset.vm; render(); }));
     root.querySelector('#pe-i').addEventListener('change', async e => { erfassen(); const f = e.target.files[0]; if (!f) return; try { p.neuBild = await bildVerkleinern(f, 800, 600, true); } catch (x) { toast('Bild nicht lesbar'); } render(); });
@@ -345,12 +347,12 @@ P.produkt = {
       if (isNaN(p.preis)) return toast('Preis prüfen');
       const r = await call({ aktion: 'produkt_speichern',
         produkt: Object.assign({ produkt_id: p.produkt_id, name: p.name, kategorie: p.kategorie, preis: p.preis, sortierung: p.sortierung, aktiv: p.aktiv, beschreibung: p.beschreibung, info_dateien: p.info_dateien },
-          rang() >= 3 ? { verantwortlich_id: p.verantwortlich_id || '', verantwortlich_platzhalter: p.verantwortlich_platzhalter || '', pfand_id: p.pfand_id || '' } : {}),
+          rang() >= 3 ? { verantwortlich_id: p.verantwortlich_id || '', verantwortlich_platzhalter: p.verantwortlich_platzhalter || '', pfand_id: p.pfand_id || '', suchbegriffe: p.suchbegriffe || '' } : {}),
         bild: p.neuBild ? { data: p.neuBild.split(',')[1] } : null,
         zusatzdateien: p.neuDateien.map(f => ({ name: f.name, mime: f.mime, data: f.url.split(',')[1] })) }, true);
       if (!r.ok) return;
       toast(r.vorschlag ? 'Zur Bestätigung gesendet' : 'Gespeichert');
-      if (p.eltern === 'produkte') produkteLaden();
+      if (rang() >= 2) { L.produkte = null; produkteLaden(); }
       if (p.eltern) go(p.eltern, p.eltern === 'standedit' ? true : undefined); else home();
       sync();
     }));
@@ -359,7 +361,7 @@ P.produkt = {
 
 /* ---------- Kategorien ---------- */
 P.kategorien = {
-  get form() { return !!ui.ke; },
+  get form() { return !!ui.ke; }, eltern: 'einstellungen',
   titel: 'Kategorien',
   open: () => { ui.ke = null; },
   body: () => `<p class="muted" style="margin:0">Preis je Markt: Die Standleitung legt die Preise dieser Kategorie für ihren Markt fest.</p>` +
@@ -399,6 +401,7 @@ function personTrifft(b, f) {
 P.personen = {
   key: 'personen',
   titel: 'Personen & Rollen',
+  kopf: () => `<button class="icon-btn rbtn" data-rechte aria-label="Rechte">${I.info}</button>`,
   open: data => { ui.offen = data && data.offen || null; ui.uq = ''; ui.pf = ui.pf || { sort: 'name', rolle: '', ort: '', gruppe: '' }; ui.prodOffen = null; ui.confirm = null; laden('personen', { aktion: 'benutzer_liste' }); },
   body: () => {
     const f = ui.pf;
@@ -434,6 +437,7 @@ P.personen = {
   },
   bind: root => {
     const f = ui.pf;
+    root.querySelector('[data-rechte]').addEventListener('click', () => go('rechte'));
     const q = root.querySelector('#uq');
     q.addEventListener('input', () => { ui.uq = q.value; const p = q.selectionStart; render(); const n = app.querySelector('#uq'); n.focus(); n.setSelectionRange(p, p); });
     root.querySelector('#pf-r').addEventListener('change', e => { f.rolle = e.target.value; render(); });
@@ -468,13 +472,15 @@ P.personen = {
 P.rueckmeldungen = {
   key: 'rueckmeldungen',
   titel: 'Rückmeldungen',
-  open: () => { ui.rmBild = ui.rmBild || {}; laden('rueckmeldungen', { aktion: 'rueckmeldungen_liste' }); },
-  body: () => geladen('rueckmeldungen', x => x.rueckmeldungen.length ? x.rueckmeldungen.map(r => `<div class="card">
+  open: () => { ui.rmBild = ui.rmBild || {}; ui.rmFilter = ui.rmFilter || 'neu'; laden('rueckmeldungen', { aktion: 'rueckmeldungen_liste' }); },
+  kopf: () => { const l = (L.rueckmeldungen && L.rueckmeldungen.rueckmeldungen) || []; return `<div class="seg mini">${[['neu', 'Neu'], ['in Arbeit', 'In Arbeit'], ['erledigt', 'Erledigt']].map(([k, t]) => `<button data-rf="${k}" aria-pressed="${ui.rmFilter === k}">${t} <span class="grauzahl">${l.filter(r => r.status === k).length}</span></button>`).join('')}</div>`; },
+  body: () => geladen('rueckmeldungen', x => { const l = x.rueckmeldungen.filter(r => r.status === ui.rmFilter); return l.length ? l.map(r => `<div class="card">
     <div class="hd"><b>${esc(r.typ)} · ${esc(r.name)}</b><span class="muted">${fmtTime(r.zeit)}</span></div>
-    <span>${esc(r.text)}</span>${r.stand ? `<span class="muted">${esc(r.stand)}</span>` : ''}
+    <span class="vorz">${esc(r.text)}</span>${r.stand ? `<span class="muted">${esc(r.stand)}</span>` : ''}
     ${r.bild ? (ui.rmBild[r.rm_id] ? `<button class="zoom" data-zoom="${esc(ui.rmBild[r.rm_id])}"><img class="rmfoto" src="${ui.rmBild[r.rm_id]}" alt="Foto"></button>` : `<button class="mini-btn" style="align-self:flex-start;margin:0" data-rmb="${esc(r.rm_id)}">Foto zeigen</button>`) : ''}
-    <div class="seg">${['neu', 'in Arbeit', 'erledigt'].map(s => `<button data-rs="${esc(r.rm_id)}|${s}" aria-pressed="${r.status === s}">${s}</button>`).join('')}</div></div>`).join('') : listeLeer('Keine Rückmeldungen')),
+    ${r.eigen && rang() < 4 ? '' : `<div class="seg">${['neu', 'in Arbeit', 'erledigt'].map(s => `<button data-rs="${esc(r.rm_id)}|${s}" aria-pressed="${r.status === s}">${s}</button>`).join('')}</div>`}</div>`).join('') : listeLeer('Keine'); }),
   bind: root => {
+    root.querySelectorAll('[data-rf]').forEach(b => b.addEventListener('click', () => { ui.rmFilter = b.dataset.rf; render(); }));
     root.querySelectorAll('[data-rs]').forEach(b => b.addEventListener('click', () => {
       const i = b.dataset.rs.lastIndexOf('|'), id = b.dataset.rs.slice(0, i), status = b.dataset.rs.slice(i + 1);
       aktion('rueckmeldung_status', { rm_id: id, status });
@@ -511,12 +517,10 @@ P.einstellungen = {
         <span class="addchip"><input id="es-sn" inputmode="decimal" placeholder="€" aria-label="Betrag"><button class="mini-btn" data-sadd>+</button></span></div></div>
       <div class="formrow"><div class="field"><label for="es-s">Storno: letzte Bons</label><input id="es-s" type="number" min="0" max="20" value="${esc(e.storno_anzahl)}"></div>
         <div class="field"><label for="es-a">Abgleich alle … Sekunden</label><input id="es-a" type="number" min="20" max="600" value="${esc(e.abgleich_sekunden)}"></div></div>
-      <h3 class="sub">Aufgaben im Personalplan</h3>
-      <div class="vrow fest"><input value="Standleitung" disabled aria-label="Standleitung"><span></span><span></span></div>
-      ${e.aufgaben.map((a, i) => `<div class="vrow aufg"><input data-ax="${i}" value="${esc(a)}" aria-label="Aufgabe ${i + 1}"><button class="mini-btn" data-auf="${i}" aria-label="nach oben" ${i ? '' : 'disabled'}>↑</button><button class="del" data-adel="${i}" aria-label="entfernen">${I.trash}</button></div>`).join('')}
-      <button class="mini-btn" style="margin:0;align-self:flex-start" data-aadd>+ Aufgabe</button>
       <h3 class="sub">Werkzeuge</h3>
-      <div class="menu"><button class="item" data-go="lasttest"><span class="ic">${I.chart}</span><span>Lasttest</span></button><button class="item" data-go="saison"><span class="ic">${I.box}</span><span>Saison abschließen</span></button></div>`;
+      <div class="menu"><button class="item" data-go="produkte"><span class="ic">${I.tag}</span><span>Alle Produkte</span></button><button class="item" data-go="kategorien"><span class="ic">${I.list}</span><span>Kategorien</span></button>
+        <button class="item" data-go="esaufgaben"><span class="ic">${I.cal}</span><span>Aufgaben im Personalplan</span></button><button class="item" data-go="log"><span class="ic">${I.clock}</span><span>Änderungslog</span></button>
+        <button class="item" data-go="lasttest"><span class="ic">${I.chart}</span><span>Lasttest</span></button><button class="item" data-go="saison"><span class="ic">${I.box}</span><span>Saison abschließen</span></button></div>`;
   },
   leiste: () => ui.es ? '<button class="btn wide" data-spe>Speichern</button>' : '',
   bind: root => {
@@ -524,13 +528,9 @@ P.einstellungen = {
     const erfassen = () => {
       e.app_titel = val(root, '#es-t'); e.verein = val(root, '#es-v'); e.benachrichtigung_email = val(root, '#es-m');
       e.storno_anzahl = val(root, '#es-s'); e.abgleich_sekunden = val(root, '#es-a');
-      e.aufgaben = [...root.querySelectorAll('[data-ax]')].map(x => x.value.trim());
     };
     root.querySelectorAll('[data-sx]').forEach(b => b.addEventListener('click', () => { erfassen(); e.scheine.splice(+b.dataset.sx, 1); render(); }));
     root.querySelector('[data-sadd]').addEventListener('click', () => { erfassen(); const v = Math.round(parseFloat(val(root, '#es-sn').replace(',', '.')) * 100) / 100; if (!(v > 0)) return toast('Betrag in Euro, z. B. 0,50'); if (!e.scheine.includes(v)) e.scheine.push(v); e.scheine.sort((a, b) => a - b); render(); });
-    root.querySelectorAll('[data-adel]').forEach(b => b.addEventListener('click', () => { erfassen(); e.aufgaben.splice(+b.dataset.adel, 1); render(); }));
-    root.querySelectorAll('[data-auf]').forEach(b => b.addEventListener('click', () => { erfassen(); const i = +b.dataset.auf; [e.aufgaben[i - 1], e.aufgaben[i]] = [e.aufgaben[i], e.aufgaben[i - 1]]; render(); }));
-    root.querySelector('[data-aadd]').addEventListener('click', () => { erfassen(); e.aufgaben.push(''); render(); const l = app.querySelectorAll('[data-ax]'); l[l.length - 1].focus(); });
     // Stämme: sofort speichern
     const gn = root.querySelector('[data-gneu]'); if (gn) gn.addEventListener('click', () => { erfassen(); ui.gEdit = 'neu'; render(); const i = app.querySelector('#g-n'); if (i) i.focus(); });
     root.querySelectorAll('[data-ged]').forEach(b => b.addEventListener('click', () => { erfassen(); ui.gEdit = b.dataset.ged; render(); }));
@@ -549,11 +549,10 @@ P.einstellungen = {
     const b = root.querySelector('[data-spe]');
     b.addEventListener('click', () => tue(b, async () => {
       erfassen();
-      const auf = e.aufgaben.map(a => a.replace(/[;,]/g, ' ').trim()).filter(a => a && a !== 'Standleitung' && a !== EGAL);
       const daten = { app_titel: e.app_titel, verein: e.verein, benachrichtigung_email: e.benachrichtigung_email, storno_anzahl: e.storno_anzahl, abgleich_sekunden: e.abgleich_sekunden,
-        schnellbetraege: e.scheine.map(v => String(v).replace('.', ',')).join(';'), aufgaben: ['Standleitung'].concat(auf).join(';') };
+        schnellbetraege: e.scheine.map(v => String(v).replace('.', ',')).join(';') };
       const r = await call({ aktion: 'einstellungen_speichern', einstellungen: daten }, true);
-      if (r.ok) { L.einstellungen.einstellungen = daten; toast('Gespeichert'); gespeichert(); sync(); }
+      if (r.ok) { Object.assign(L.einstellungen.einstellungen, daten); toast('Gespeichert'); gespeichert(); sync(); }
     }));
   }
 };
@@ -562,6 +561,62 @@ function esLaden(x) {
     scheine: String(x.schnellbetraege || '0,5;1;2;5;10;20;50').split(';').map(v => Math.round(parseFloat(v.replace(',', '.')) * 100) / 100).filter(n => n > 0),
     aufgaben: String(x.aufgaben || '').split(/[;,]/).map(a => a.trim()).filter(a => a && a !== 'Standleitung') };
 }
+
+/* ---------- Aufgaben im Personalplan (Admin) ---------- */
+P.esaufgaben = {
+  form: true, eltern: 'einstellungen', key: 'einstellungen',
+  titel: 'Aufgaben im Personalplan',
+  open: () => { ui.auf = null; const f = x => { ui.auf = String(x.aufgaben || '').split(/[;,]/).map(a => a.trim()).filter(a => a && a !== 'Standleitung'); };
+    if (L.einstellungen && L.einstellungen.ok) f(L.einstellungen.einstellungen);
+    laden('einstellungen', { aktion: 'einstellungen_admin' }).then(r => { if (r.ok && !ui.auf) { f(r.einstellungen); render(); } }); },
+  body: () => !ui.auf ? ladeHtml : `<div class="vrow fest"><input value="Standleitung" disabled aria-label="Standleitung"><span></span><span></span></div>
+    ${ui.auf.map((a, i) => `<div class="vrow aufg"><input data-ax="${i}" value="${esc(a)}" aria-label="Aufgabe ${i + 1}"><button class="mini-btn" data-auf="${i}" aria-label="nach oben" ${i ? '' : 'disabled'}>↑</button><button class="del" data-adel="${i}" aria-label="entfernen">${I.trash}</button></div>`).join('')}
+    <button class="mini-btn" style="margin:0;align-self:flex-start" data-aadd>+ Aufgabe</button>`,
+  leiste: () => ui.auf ? '<button class="btn wide" data-spe>Speichern</button>' : '',
+  bind: root => {
+    const e = ui.auf; if (!e) return;
+    const erfassen = () => { const l = [...root.querySelectorAll('[data-ax]')].map(x => x.value.trim()); e.length = 0; e.push(...l); };
+    root.querySelectorAll('[data-adel]').forEach(b => b.addEventListener('click', () => { erfassen(); e.splice(+b.dataset.adel, 1); render(); }));
+    root.querySelectorAll('[data-auf]').forEach(b => b.addEventListener('click', () => { erfassen(); const i = +b.dataset.auf; [e[i - 1], e[i]] = [e[i], e[i - 1]]; render(); }));
+    root.querySelector('[data-aadd]').addEventListener('click', () => { erfassen(); e.push(''); render(); const l = app.querySelectorAll('[data-ax]'); l[l.length - 1].focus(); });
+    const b = root.querySelector('[data-spe]');
+    b.addEventListener('click', () => tue(b, async () => {
+      erfassen();
+      const auf = ['Standleitung'].concat(e.map(a => a.replace(/[;,]/g, ' ').trim()).filter(a => a && a !== 'Standleitung' && a !== EGAL)).join(';');
+      const r = await call({ aktion: 'einstellungen_speichern', einstellungen: { aufgaben: auf } }, true);
+      if (r.ok) { if (L.einstellungen && L.einstellungen.einstellungen) L.einstellungen.einstellungen.aufgaben = auf; toast('Gespeichert'); gespeichert(); sync(); }
+    }));
+  }
+};
+
+/* ---------- Änderungslog (Admin) ---------- */
+const LOG_KAT = ['Personen', 'Preise', 'Produkte', 'Stände', 'Märkte', 'Storno', 'Verantwortung'];
+P.log = {
+  key: 'log', eltern: 'einstellungen',
+  titel: 'Änderungslog',
+  open: () => { ui.logKat = ui.logKat || ''; laden('log', { aktion: 'protokoll' }); },
+  kopf: () => `<div class="chips wrap">${[['', 'Alle']].concat(LOG_KAT.map(k => [k, k])).map(([k, t]) => `<button class="chip${ui.logKat === k ? ' on' : ''}" data-lk="${esc(k)}">${t}</button>`).join('')}</div>`,
+  body: () => geladen('log', x => {
+    const l = x.eintraege.filter(e => !ui.logKat || e.kategorie === ui.logKat).slice(0, 300);
+    return l.length ? `<div class="loglist">${l.map(e => `<div class="logz"><small class="muted">${fmtTime(e.zeit)} · ${esc(e.kategorie)} · ${esc(e.name || '–')}</small><span>${esc(e.text)}</span></div>`).join('')}</div>` : listeLeer('Keine Einträge');
+  }),
+  bind: root => root.querySelectorAll('[data-lk]').forEach(b => b.addEventListener('click', () => { ui.logKat = b.dataset.lk; render(); }))
+};
+
+/* ---------- Rechteübersicht ---------- */
+OV.rechte = {
+  titel: () => 'Rechte',
+  body: () => {
+    const z = [['Kassieren, eigene Bons', 1], ['Ausverkauft melden', 1], ['Schichten eintragen', 1], ['Rückmeldung senden', 1],
+      ['Personal planen, Codes, Einladen', 2], ['Bons des Stands verwalten', 2], ['Stand einrichten, Preise', 2, '★'], ['Nachricht an eigene Leute', 2, '★'],
+      ['Umsatz sehen', 3], ['Märkte & Stände anlegen', 3], ['Servicemodus, Produkte', 3], ['Rollen bis Standleitung', 3],
+      ['Alle Rollen, Stämme', 4], ['Einstellungen, Kategorien', 4], ['Änderungslog', 4], ['Nachricht an alle', 4]];
+    return `<table class="rechte"><thead><tr><th></th>${['Helfer', 'Stand-L.', 'Markt-L.', 'Admin'].map(r => `<th>${r}</th>`).join('')}</tr></thead>
+      <tbody>${z.map(([t, ab, st]) => `<tr><td>${esc(t)}</td>${[1, 2, 3, 4].map(r => `<td>${r >= ab ? (st && r === ab ? st : '✓') : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>
+      <p class="muted" style="margin:8px 0 0">★ nur als Verantwortliche</p>`;
+  },
+  footer: () => '<button class="btn wide" data-close>Schließen</button>'
+};
 
 /* ---------- Lasttest (Admin): mehrere Geräte nachstellen, gegen die echte Schnittstelle ---------- */
 P.lasttest = {

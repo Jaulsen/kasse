@@ -2,14 +2,14 @@
 window.__GS = (function () {
 /**
  * Weihnachtsmarkt-Kasse – Google-Schnittstelle
- * Version 2.5 · 2026-11-26
+ * Version 2.6 · 2026-11-27
  *
  * Gehört in das Apps-Script-Projekt am Google Sheet (Erweiterungen › Apps Script).
  * Fehlende Tabs und Spalten legt die Schnittstelle selbst an; ein Sheet aus
  * Version 1.x wird beim ersten Aufruf automatisch umgestellt (Märkte › Stände).
  */
 
-const VERSION = '2.5';
+const VERSION = '2.6';
 const TZ = 'Europe/Berlin';
 const MAX_DATEI_BYTES = 350000;
 const PUFFER_MIN = 30;
@@ -20,7 +20,7 @@ const TABS = {
   'Einstellungen': ['schluessel', 'wert', 'erklaerung'],
   'Gruppen': ['gruppe_id', 'name', 'sortierung'],
   'Kategorien': ['kategorie', 'sortierung', 'farbe', 'preis_je_markt', 'notiz'],
-  'Produkte': ['produkt_id', 'name', 'kategorie', 'preis', 'bild', 'sortierung', 'aktiv', 'beschreibung', 'info_dateien', 'vorgeschlagen_von', 'notiz', 'verantwortlich_id', 'verantwortlich_platzhalter', 'offen_bild', 'offen_beschreibung', 'offen_info', 'offen_von', 'offen_am', 'pfand_id'],
+  'Produkte': ['produkt_id', 'name', 'kategorie', 'preis', 'bild', 'sortierung', 'aktiv', 'beschreibung', 'info_dateien', 'vorgeschlagen_von', 'notiz', 'verantwortlich_id', 'verantwortlich_platzhalter', 'offen_bild', 'offen_beschreibung', 'offen_info', 'offen_von', 'offen_am', 'pfand_id', 'suchbegriffe'],
   'Märkte': ['markt_id', 'name', 'ort', 'datum_von', 'datum_bis', 'archiviert', 'notiz', 'gruppe_id'],
   'Stände': ['stand_id', 'markt_id', 'name', 'kategorien', 'standzeiten', 'archiviert', 'notiz'],
   'Zuständigkeiten': ['art', 'ref_id', 'benutzer_id', 'verantwortlich', 'erstellt_von', 'erstellt_am'],
@@ -30,17 +30,18 @@ const TABS = {
   'Schichten': ['schicht_id', 'stand_id', 'datum', 'von', 'bis', 'aufgabe', 'benutzer_id', 'platzhalter', 'status', 'erstellt_von', 'ersetzt', 'anfrage'],
   'Verfügbarkeit': ['stand_id', 'produkt_id', 'status', 'geaendert_von', 'geaendert_am', 'geprueft'],
   'Zugangscodes': ['code', 'stand_id', 'datum', 'erstellt_von', 'erstellt_am', 'eingeloest_von', 'geraet_id', 'eingeloest_am', 'entzogen_am', 'entzogen_von'],
-  'Verkäufe': ['bon_id', 'zeit', 'stand_id', 'benutzer_id', 'geraet_id', 'anzahl_artikel', 'summe', 'gegeben', 'rueckgeld', 'status', 'art', 'empfangen_am', 'hinweis', 'bestaetigt_von', 'bestaetigt_am'],
+  'Verkäufe': ['bon_id', 'zeit', 'stand_id', 'benutzer_id', 'geraet_id', 'anzahl_artikel', 'summe', 'gegeben', 'rueckgeld', 'status', 'art', 'empfangen_am', 'hinweis', 'bestaetigt_von', 'bestaetigt_am', 'korrektur_von'],
   'Positionen': ['bon_id', 'pos_nr', 'zeit', 'stand_id', 'benutzer_id', 'produkt_id', 'produktname', 'kategorie', 'einzelpreis', 'menge', 'zeilensumme', 'status'],
   'Rückmeldungen': ['rm_id', 'zeit', 'benutzer_id', 'stand_id', 'typ', 'text', 'geraet_info', 'status', 'notiz', 'bild'],
-  'Nachrichten': ['nachricht_id', 'an', 'titel', 'text', 'von', 'am', 'gelesen_am'],
+  'Nachrichten': ['nachricht_id', 'an', 'titel', 'text', 'von', 'am', 'gelesen_am', 'bild'],
   'Vorschläge': ['vorschlag_id', 'art', 'ref_id', 'daten', 'von', 'an', 'am', 'status'],
   'Checklisten': ['punkt_id', 'art', 'ref_id', 'text', 'zustaendig_id', 'platzhalter', 'faellig', 'sortierung', 'erledigt_von', 'erledigt_am'],
   'Vorlagen': ['vorlage_id', 'name', 'typ', 'besitzer', 'basis_id', 'punkte', 'geaendert_am', 'gruppe_id'],
-  'Lasttest': ['zeit', 'nr', 'daten']
+  'Lasttest': ['zeit', 'nr', 'daten'],
+  'Protokoll': ['kategorie', 'zeit', 'benutzer_id', 'text']
 };
 /* Tabellen, deren Änderung die Stammdaten der Geräte nicht berührt (kein neuer Datenstand) */
-const OHNE_DATENSTAND = ['Positionen', 'Verkäufe', 'Einladungen', 'Lasttest'];
+const OHNE_DATENSTAND = ['Positionen', 'Verkäufe', 'Einladungen', 'Lasttest', 'Protokoll'];
 
 /* ===================================================================
    Einstieg
@@ -72,7 +73,8 @@ const AKTIONEN = {
   verantwortung: verantwortung_, checkpunkt_speichern: checkpunktSpeichern_, checkpunkt_loeschen: checkpunktLoeschen_, checkpunkt_haken: checkpunktHaken_,
   vorlage_speichern: vorlageSpeichern_, vorlage_loeschen: vorlageLoeschen_, vorlage_anwenden: vorlageAnwenden_, markt_kopieren: marktKopieren_,
   gruppe_speichern: gruppeSpeichern_, gruppe_loeschen: gruppeLoeschen_, gruppe_waehlen: gruppeWaehlen_, plan_kopieren: planKopieren_,
-  rm_bild: rmBild_, lasttest: lasttest_, saison_abschliessen: saisonAbschliessen_
+  rm_bild: rmBild_, lasttest: lasttest_, saison_abschliessen: saisonAbschliessen_,
+  empfaenger: empfaenger_, nachricht_bild: nachrichtBild_, protokoll: protokollListe_
 };
 
 function verarbeite_(p) {
@@ -633,7 +635,7 @@ function stammdaten_(p) {
     });
     return { produkt_id: txt_(z.produkt_id), name: txt_(z.name), kategorie: txt_(z.kategorie), preis: cent_(z.preis), sortierung: Number(z.sortierung) || 0,
       bild: bild && bilder[bild] ? bild : '', bild_t: bild && bilder[bild] ? bilder[bild].t : 0, beschreibung: txt_(z.beschreibung), info: info,
-      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich: txt_(z.verantwortlich_id) ? (alleNamen[txt_(z.verantwortlich_id)] || '') : name_(z.verantwortlich_platzhalter), pfand_id: txt_(z.pfand_id) };
+      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich: txt_(z.verantwortlich_id) ? (alleNamen[txt_(z.verantwortlich_id)] || '') : name_(z.verantwortlich_platzhalter), pfand_id: txt_(z.pfand_id), suchbegriffe: txt_(z.suchbegriffe) };
   });
   const maerkte = tab_('Märkte').zeilen.filter(function (z) { return txt_(z.markt_id) && !ja_(z.archiviert) && gleicheGruppe_(b, z.gruppe_id); }).map(function (z) {
     return { markt_id: txt_(z.markt_id), name: txt_(z.name), ort: txt_(z.ort), datum_von: tag_(z.datum_von), datum_bis: tag_(z.datum_bis), gruppe_id: txt_(z.gruppe_id) };
@@ -772,7 +774,7 @@ function bonSpeichern_(d, p, en, bons) {
     gegeben: d.gegeben === null || d.gegeben === undefined ? '' : euro_(d.gegeben),
     rueckgeld: d.rueckgeld === null || d.rueckgeld === undefined ? '' : euro_(d.rueckgeld),
     status: storniert ? 'storniert' : 'ok', art: d.art === 'nachtrag' ? 'nachtrag' : 'kasse',
-    empfangen_am: new Date(), hinweis: hinweise.join('; ')
+    empfangen_am: new Date(), hinweis: hinweise.join('; '), korrektur_von: txt_(d.korrektur_von)
   });
   d.positionen.forEach(function (pos, i) {
     bons.positionen.push({ bon_id: d.bon_id, pos_nr: pos.pos_nr || i + 1, zeit: zeit, stand_id: standId, benutzer_id: d.benutzer_id,
@@ -809,6 +811,7 @@ function stornieren_(d, benutzerId) {
   if (txt_(bon.status) === 'storniert') return;
   if (txt_(bon.hinweis) && !txt_(bon.bestaetigt_am)) geschrieben_ = true;
   setzen_(vk, bon, 'status', 'storniert');
+  protokoll_('Storno', b, euro_(cent_(bon.summe)).toFixed(2).replace('.', ',') + ' € · ' + ((stand_(bon.stand_id) || {}).name || '') + ' · ' + Utilities.formatDate(new Date(bon.zeit), TZ, 'dd.MM. HH:mm') + (txt_(bon.benutzer_id) !== txt_(benutzerId) ? ' · Bon von ' + (namen_()[txt_(bon.benutzer_id)] || '') : ''));
   const pos = kopf_('Positionen');
   spaltenLesen_(pos, ['bon_id']).forEach(function (z) { if (txt_(z.bon_id) === txt_(d.bon_id)) setzen_(pos, z, 'status', 'storniert'); });
 }
@@ -1035,11 +1038,11 @@ function planKopieren_(p) {
 function bonsMitHinweis_() {
   const vk = kopf_('Verkäufe');
   const l = spaltenLesen_(vk, ['hinweis', 'bestaetigt_am', 'status']).filter(function (z) { return txt_(z.hinweis) && !txt_(z.bestaetigt_am) && txt_(z.status) === 'ok'; });
-  return l.slice(-200).map(function (z) {
-    const w = vk.sh.getRange(z._zeile, 1, 1, vk.kopf.length).getValues()[0], o = { _zeile: z._zeile };
-    vk.kopf.forEach(function (h, j) { if (h) o[h] = w[j]; });
-    return o;
-  });
+  const zeile = function (w, nr) { const o = { _zeile: nr }; vk.kopf.forEach(function (h, j) { if (h) o[h] = w[j]; }); return o; };
+  if (l.length <= 15) return l.map(function (z) { return zeile(vk.sh.getRange(z._zeile, 1, 1, vk.kopf.length).getValues()[0], z._zeile); });
+  // viele Treffer: einmal den Bereich vom ersten Treffer an lesen
+  const von = l[0]._zeile, werte = vk.sh.getRange(von, 1, vk.letzte - von + 1, vk.kopf.length).getValues();
+  return l.slice(-300).map(function (z) { return zeile(werte[z._zeile - von], z._zeile); });
 }
 /* Erste Zeile mit einem heutigen Eintrag: davor steht nichts von heute */
 function heuteAb_(t) {
@@ -1088,6 +1091,7 @@ function hinweisListe_(b) {
   });
   tab_('Rückmeldungen').zeilen.forEach(function (z) {
     if (txt_(z.status) !== 'neu') return;
+    if (!admin && txt_(z.benutzer_id) === ich) return;
     add({ typ: 'rueckmeldung', id: txt_(z.rm_id), titel: txt_(z.typ) + ' · ' + (namen[txt_(z.benutzer_id)] || ''), text: txt_(z.text), stand: standName[txt_(z.stand_id)], zeit: iso_(z.zeit) }, admin || eigene[txt_(z.stand_id)]);
   });
   tab_('Vorschläge').zeilen.forEach(function (z) {
@@ -1178,6 +1182,7 @@ function hinweisAktion_(p) {
       const z = t.zeilen.filter(function (x) { return txt_(x.rm_id) === txt_(p.id); })[0];
       if (!z) throw new Error('Nicht gefunden.');
       if (!(rang_(b) >= 4 || standRecht_(b, z.stand_id))) throw new Error('Keine Berechtigung.');
+      if (txt_(z.benutzer_id) === txt_(b.benutzer_id) && rang_(b) < 4) throw new Error('Eigene Rückmeldungen bearbeitet ein Admin.');
       const st = ja ? 'erledigt' : 'in Arbeit';
       if (txt_(z.benutzer_id) !== txt_(b.benutzer_id)) nachricht_(txt_(z.benutzer_id), 'Rückmeldung: ' + st, txt_(z.text).slice(0, 120), b);
       setzen_(t, z, 'status', st);
@@ -1191,43 +1196,97 @@ function hinweisAktion_(p) {
 /* ===================================================================
    Nachrichten an Personen
    =================================================================== */
-function nachricht_(an, titel, text, von) {
+function nachricht_(an, titel, text, von, bild) {
   if (!txt_(an)) return;
-  anhaengen_(tab_('Nachrichten'), [{ nachricht_id: Utilities.getUuid().slice(0, 12), an: txt_(an), titel: txt_(titel), text: txt_(text), von: von ? txt_(von.benutzer_id) : '', am: new Date() }]);
+  anhaengen_(tab_('Nachrichten'), [{ nachricht_id: Utilities.getUuid().slice(0, 12), an: txt_(an), titel: txt_(titel), text: txt_(text), von: von ? txt_(von.benutzer_id) : '', am: new Date(), bild: bild || '' }]);
 }
+/* Gelesene Nachrichten: 7 Tage in der App, nach 30 Tagen aus dem Sheet */
 function nachrichtenFuer_(b) {
-  const ich = txt_(b.benutzer_id), namen = namen_(), grenze = Date.now() - 14 * 864e5;
-  return tab_('Nachrichten').zeilen.filter(function (z) { return txt_(z.an) === ich && (!txt_(z.gelesen_am) || new Date(z.am).getTime() > grenze); })
-    .map(function (z) { return { id: txt_(z.nachricht_id), titel: txt_(z.titel), text: txt_(z.text), von: namen[txt_(z.von)] || '', am: iso_(z.am), gelesen: !!txt_(z.gelesen_am) }; })
-    .sort(function (a, c) { return c.am < a.am ? -1 : 1; }).slice(0, 30);
+  const ich = txt_(b.benutzer_id), namen = namen_(), grenze = Date.now() - 7 * 864e5;
+  return tab_('Nachrichten').zeilen.filter(function (z) { return txt_(z.an) === ich && (!txt_(z.gelesen_am) || new Date(z.gelesen_am).getTime() > grenze); })
+    .map(function (z) { return { id: txt_(z.nachricht_id), titel: txt_(z.titel), text: txt_(z.text), von: namen[txt_(z.von)] || '', am: iso_(z.am), gelesen: !!txt_(z.gelesen_am), bild: !!txt_(z.bild) }; })
+    .sort(function (a, c) { return c.am < a.am ? -1 : 1; }).slice(0, 60);
+}
+function nachrichtenAufraeumen_() {
+  const c = CacheService.getScriptCache(), k = 'aufgeraeumt_' + heute_();
+  if (c.get(k)) return;
+  c.put(k, '1', 21600);
+  const t = tab_('Nachrichten'), grenze = Date.now() - 30 * 864e5;
+  const alt = t.zeilen.filter(function (z) { return txt_(z.gelesen_am) && new Date(z.am).getTime() < grenze; });
+  if (!alt.length) return;
+  // in einem Zug: Tabelle ohne die alten Zeilen neu schreiben
+  const bleibt = t.zeilen.filter(function (z) { return alt.indexOf(z) < 0; });
+  t.sh.getRange(2, 1, t.zeilen.length, t.kopf.length).clearContent();
+  if (bleibt.length) t.sh.getRange(2, 1, bleibt.length, t.kopf.length).setValues(bleibt.map(function (z) { return t.kopf.map(function (h) { const v = z[h]; return typeof v === 'string' && v !== '' ? "'" + v : (v === undefined || v === null ? '' : v); }); }));
+  delete cache_['Nachrichten'];
 }
 function nachrichtGelesen_(p) {
   const b = auth_(p);
-  const t = tab_('Nachrichten');
-  t.zeilen.forEach(function (z) { if (txt_(z.an) === txt_(b.benutzer_id) && !txt_(z.gelesen_am) && (p.id === 'alle' || txt_(z.nachricht_id) === txt_(p.id))) setzen_(t, z, 'gelesen_am', new Date()); });
-  return { ok: true };
+  return sperre_(function () {
+    const t = tab_('Nachrichten');
+    t.zeilen.forEach(function (z) { if (txt_(z.an) === txt_(b.benutzer_id) && !txt_(z.gelesen_am) && (p.id === 'alle' || txt_(z.nachricht_id) === txt_(p.id))) setzen_(t, z, 'gelesen_am', new Date()); });
+    nachrichtenAufraeumen_();
+    return { ok: true };
+  });
 }
+/* Leute eines Stands oder Markts: Zuständige, Eingeplante, Personen mit Checklisten-Punkten */
+function leuteVon_(art, ref) {
+  const staende = art === 'stand' ? [txt_(ref)] : tab_('Stände').zeilen.filter(function (s) { return txt_(s.markt_id) === txt_(ref); }).map(function (s) { return txt_(s.stand_id); });
+  const set = {};
+  tab_('Zuständigkeiten').zeilen.forEach(function (z) { if ((txt_(z.art) === 'stand' && staende.indexOf(txt_(z.ref_id)) >= 0) || (txt_(z.art) === 'markt' && art === 'markt' && txt_(z.ref_id) === txt_(ref))) set[txt_(z.benutzer_id)] = true; });
+  tab_('Schichten').zeilen.forEach(function (z) { if (txt_(z.benutzer_id) && staende.indexOf(txt_(z.stand_id)) >= 0) set[txt_(z.benutzer_id)] = true; });
+  tab_('Checklisten').zeilen.forEach(function (z) { if (txt_(z.zustaendig_id) && ((txt_(z.art) === 'stand' && staende.indexOf(txt_(z.ref_id)) >= 0) || (art === 'markt' && txt_(z.art) === 'markt' && txt_(z.ref_id) === txt_(ref)))) set[txt_(z.zustaendig_id)] = true; });
+  return set;
+}
+/* Schreiben: Admins an alle; Markt- und Standverantwortliche an die Leute ihres Markts/Stands */
 function nachrichtSenden_(p) {
-  const b = auth_(p, 4);
+  const b = auth_(p, 2);
+  const admin = rang_(b) >= 4;
   const titel = txt_(p.titel), text = txt_(p.text).slice(0, 2000);
   if (!titel) throw new Error('Betreff fehlt.');
   const ziel = p.ziel || { art: 'alle' };
   const personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt); });
+  const alleIds = personen.map(function (z) { return txt_(z.benutzer_id); });
   let ids;
+  if (!admin) {
+    if (['stand', 'markt'].indexOf(ziel.art) < 0 || !verantwortlich_(b, ziel.art, ziel.wert)) throw new Error('Nur an die Leute deines Markts oder Stands.');
+  }
   if (ziel.art === 'rolle') ids = personen.filter(function (z) { return rolle_(z) === ziel.wert; }).map(function (z) { return txt_(z.benutzer_id); });
   else if (ziel.art === 'gruppe') ids = personen.filter(function (z) { return txt_(z.gruppe_id) === txt_(ziel.wert); }).map(function (z) { return txt_(z.benutzer_id); });
-  else if (ziel.art === 'stand' || ziel.art === 'markt') {
-    const staende = ziel.art === 'stand' ? [txt_(ziel.wert)] : tab_('Stände').zeilen.filter(function (s) { return txt_(s.markt_id) === txt_(ziel.wert); }).map(function (s) { return txt_(s.stand_id); });
-    const set = {};
-    tab_('Zuständigkeiten').zeilen.forEach(function (z) { if ((txt_(z.art) === 'stand' && staende.indexOf(txt_(z.ref_id)) >= 0) || (txt_(z.art) === 'markt' && txt_(z.ref_id) === txt_(ziel.wert))) set[txt_(z.benutzer_id)] = true; });
-    tab_('Schichten').zeilen.forEach(function (z) { if (txt_(z.benutzer_id) && staende.indexOf(txt_(z.stand_id)) >= 0) set[txt_(z.benutzer_id)] = true; });
-    tab_('Checklisten').zeilen.forEach(function (z) { if (txt_(z.zustaendig_id) && ((txt_(z.art) === 'stand' && staende.indexOf(txt_(z.ref_id)) >= 0) || (txt_(z.art) === 'markt' && txt_(z.ref_id) === txt_(ziel.wert)))) set[txt_(z.zustaendig_id)] = true; });
-    ids = personen.map(function (z) { return txt_(z.benutzer_id); }).filter(function (id) { return set[id]; });
-  } else ids = personen.map(function (z) { return txt_(z.benutzer_id); });
+  else if (ziel.art === 'stand' || ziel.art === 'markt') { const set = leuteVon_(ziel.art, ziel.wert); ids = alleIds.filter(function (id) { return set[id]; }); }
+  else if (ziel.art === 'personen') ids = alleIds;
+  else ids = alleIds;
+  // Auswahl einzelner Personen (innerhalb des Ziels)
+  if (Array.isArray(p.personen) && p.personen.length) { const w = p.personen.map(txt_); ids = ids.filter(function (id) { return w.indexOf(id) >= 0; }); }
+  else if (ziel.art === 'personen') throw new Error('Personen auswählen.');
+  ids = ids.filter(function (id) { return id !== txt_(b.benutzer_id); });
+  if (!ids.length) throw new Error('Niemand ausgewählt.');
+  let bild = '';
+  if (p.bild && typeof p.bild === 'string') bild = dateiSpeichern_(ordnerSicherstellen_('nachricht_ordner_id', 'Kassen-App Nachrichten'), 'nachricht_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '.jpg', p.bild, 'image/jpeg', false);
   return sperre_(function () {
-    ids.forEach(function (id) { nachricht_(id, titel, text, b); });
+    const jetzt = new Date();
+    anhaengen_(tab_('Nachrichten'), ids.map(function (id) { return { nachricht_id: Utilities.getUuid().slice(0, 12), an: id, titel: titel, text: text, von: txt_(b.benutzer_id), am: jetzt, bild: bild }; }));
     return { ok: true, anzahl: ids.length };
   });
+}
+/* Leute zur Auswahl beim Schreiben */
+function empfaenger_(p) {
+  const b = auth_(p, 2);
+  const ziel = p.ziel || {};
+  if (rang_(b) < 4 && !(['stand', 'markt'].indexOf(ziel.art) >= 0 && verantwortlich_(b, ziel.art, ziel.wert))) throw new Error('Keine Berechtigung.');
+  const set = ziel.art === 'stand' || ziel.art === 'markt' ? leuteVon_(ziel.art, ziel.wert) : null;
+  return { ok: true, personen: tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && txt_(z.benutzer_id) !== txt_(b.benutzer_id) && (!set || set[txt_(z.benutzer_id)]) && (set || personSichtbar_(b, z)); })
+    .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z) }; }).sort(function (a, c) { return a.name.localeCompare(c.name); }) };
+}
+function nachrichtBild_(p) {
+  const b = auth_(p);
+  const z = tab_('Nachrichten').zeilen.filter(function (x) { return txt_(x.nachricht_id) === txt_(p.id); })[0];
+  if (!z || !txt_(z.bild)) throw new Error('Kein Foto.');
+  if (txt_(z.an) !== txt_(b.benutzer_id) && rang_(b) < 4) throw new Error('Keine Berechtigung.');
+  const f = ordnerListe_(einstellungen_().nachricht_ordner_id)[txt_(z.bild)];
+  if (!f) throw new Error('Foto nicht gefunden.');
+  const blob = DriveApp.getFileById(f.id).getBlob();
+  return { ok: true, mime: blob.getContentType() || 'image/jpeg', data: Utilities.base64Encode(blob.getBytes()) };
 }
 
 /* ===================================================================
@@ -1246,8 +1305,8 @@ function vorschlagEntscheiden_(b, id, ja) {
     : an[0] === 'stand' ? standAendern_(b, an[1]) : marktAendern_(b, an[1]);
   if (!darf) throw new Error('Keine Berechtigung.');
   if (ja) {
-    if (txt_(z.art) === 'stand') standUebernehmen_(d.stand);
-    else if (txt_(z.art) === 'markt') marktUebernehmen_(d.markt);
+    if (txt_(z.art) === 'stand') standUebernehmen_(d.stand, b);
+    else if (txt_(z.art) === 'markt') marktUebernehmen_(d.markt, b);
     else if (txt_(z.art) === 'preis') preisUebernehmen_(von || b, d.markt_id, d.produkt_id, d.preis);
     else if (txt_(z.art) === 'verantwortung') verantwortungUebernehmen_(b, d);
   }
@@ -1308,6 +1367,7 @@ function benutzerLoeschen_(p) {
       if (ja_(x.verantwortlich) && verantwortliche_(txt_(x.art), txt_(x.ref_id)).length <= 1) throw new Error('Ist einzige verantwortliche Person – erst Verantwortung weitergeben.');
     });
     zt.zeilen.filter(function (x) { return txt_(x.benutzer_id) === id; }).forEach(function (x) { loeschen_(zt, x); });
+    protokoll_('Personen', b, name_(z.name) + (benutzt ? ' entfernt' : ' gelöscht'));
     if (benutzt) { setzen_(t, z, 'aktiv', 'NEIN'); setzen_(t, z, 'entfernt', 'JA'); return { ok: true, entfernt: true }; }
     loeschen_(t, z);
     return { ok: true, geloescht: true };
@@ -1328,13 +1388,14 @@ function benutzerAendern_(p) {
       if (!RANG[p.rolle]) throw new Error('Unbekannte Rolle.');
       if (!istAdmin && RANG[p.rolle] >= 3) throw new Error('Keine Berechtigung.');
       if (letzterAdmin && p.rolle !== 'Admin') throw new Error('Es muss mindestens einen Admin geben.');
-      if (rolle_(z) !== p.rolle) nachricht_(txt_(z.benutzer_id), 'Neue Rolle: ' + p.rolle, 'Deine Rolle wurde von ' + name_(admin.name) + ' geändert.', admin);
+      if (rolle_(z) !== p.rolle) { nachricht_(txt_(z.benutzer_id), 'Neue Rolle: ' + p.rolle, 'Deine Rolle wurde von ' + name_(admin.name) + ' geändert.', admin); protokoll_('Personen', admin, name_(z.name) + ': Rolle ' + rolle_(z) + ' → ' + p.rolle); }
       setzen_(t, z, 'rolle', p.rolle);
     }
     if (p.status) {
       if (txt_(z.benutzer_id) === txt_(admin.benutzer_id) && p.status !== 'aktiv') throw new Error('Nicht bei dir selbst.');
       if (letzterAdmin && p.status !== 'aktiv') throw new Error('Es muss mindestens einen Admin geben.');
       if (status_(z) === 'gesperrt' && p.status === 'aktiv') nachricht_(txt_(z.benutzer_id), 'Zugang freigegeben', '', admin);
+      if (status_(z) !== p.status) protokoll_('Personen', admin, name_(z.name) + ': ' + (p.status === 'aktiv' ? 'freigegeben' : 'gesperrt'));
       setzen_(t, z, 'aktiv', p.status === 'aktiv' ? 'JA' : 'NEIN');
       if (p.status === 'aktiv' && ja_(z.entfernt)) setzen_(t, z, 'entfernt', '');
     }
@@ -1345,6 +1406,7 @@ function benutzerAendern_(p) {
       if (g !== txt_(z.gruppe_id)) {
         const gn = (gruppen_().filter(function (x) { return x.gruppe_id === g; })[0] || {}).name || '';
         if (txt_(z.benutzer_id) !== txt_(admin.benutzer_id)) nachricht_(txt_(z.benutzer_id), 'Neue Zuordnung: ' + gn, '', admin);
+        protokoll_('Personen', admin, name_(z.name) + ': Stamm ' + gn);
         setzen_(t, z, 'gruppe_id', g);
       }
     }
@@ -1352,6 +1414,7 @@ function benutzerAendern_(p) {
       if (!istAdmin) throw new Error('Keine Berechtigung.');
       if (!/^\d{4,6}$/.test(txt_(p.neue_pin))) throw new Error('PIN: 4–6 Ziffern.');
       setzen_(t, z, 'pin_hash', pinHash_(txt_(z.benutzer_id), txt_(p.neue_pin))); setzen_(t, z, 'pin_fehler', 0); setzen_(t, z, 'pin_gesperrt_bis', '');
+      protokoll_('Personen', admin, name_(z.name) + ': neue PIN');
     }
     return { ok: true, benutzer: benutzerInfo_(z) };
   });
@@ -1368,7 +1431,7 @@ function produkteAdmin_(p) {
     return { produkt_id: txt_(z.produkt_id), name: txt_(z.name), kategorie: txt_(z.kategorie), preis: cent_(z.preis), bild: txt_(z.bild),
       sortierung: Number(z.sortierung) || 0, aktiv: a !== 'NEIN' && a !== 'VORSCHLAG', vorschlag: a === 'VORSCHLAG', beschreibung: txt_(z.beschreibung),
       info_dateien: txt_(z.info_dateien).split(/[;,\n]/).map(txt_).filter(String),
-      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich_platzhalter: name_(z.verantwortlich_platzhalter), verantwortlich: namen[txt_(z.verantwortlich_id)] || '', offen: !!txt_(z.offen_am), pfand_id: txt_(z.pfand_id) };
+      verantwortlich_id: txt_(z.verantwortlich_id), verantwortlich_platzhalter: name_(z.verantwortlich_platzhalter), verantwortlich: namen[txt_(z.verantwortlich_id)] || '', offen: !!txt_(z.offen_am), pfand_id: txt_(z.pfand_id), suchbegriffe: txt_(z.suchbegriffe) };
   }) };
 }
 
@@ -1411,7 +1474,10 @@ function produktSpeichern_(p) {
     if (marktleitung) {
       if (!txt_(d.name)) throw new Error('Name fehlt.');
       if (!txt_(d.kategorie)) throw new Error('Kategorie fehlt.');
-      Object.assign(werte, { name: txt_(d.name), kategorie: txt_(d.kategorie), preis: euro_(d.preis), sortierung: Number(d.sortierung) || 0, aktiv: d.aktiv === false ? 'NEIN' : 'JA' });
+      Object.assign(werte, { name: txt_(d.name), kategorie: txt_(d.kategorie), preis: euro_(d.preis), aktiv: d.aktiv === false ? 'NEIN' : 'JA', suchbegriffe: txt_(d.suchbegriffe).slice(0, 300) });
+      // Sortierung nur Admins; neue Produkte ans Ende ihrer Kategorie
+      if (rang_(b) >= 4 && d.sortierung !== undefined) werte.sortierung = Number(d.sortierung) || 0;
+      else if (!z) werte.sortierung = t.zeilen.filter(function (x) { return txt_(x.kategorie) === txt_(d.kategorie); }).reduce(function (m, x) { return Math.max(m, Number(x.sortierung) || 0); }, 0) + 1;
       if (d.pfand_id !== undefined) werte.pfand_id = txt_(d.pfand_id) === id ? '' : txt_(d.pfand_id);
       if (d.verantwortlich_id !== undefined || d.verantwortlich_platzhalter !== undefined) {
         let vid = txt_(d.verantwortlich_id), ph = vid ? '' : name_(d.verantwortlich_platzhalter);
@@ -1423,6 +1489,10 @@ function produktSpeichern_(p) {
       if (z && vz && vz !== txt_(b.benutzer_id) && (bild || inhalt.beschreibung !== txt_(z.beschreibung) || inhalt.info_dateien !== txt_(z.info_dateien)))
         nachricht_(vz, 'Produkt geändert: ' + txt_(d.name), 'Bild oder Beschreibung geändert von ' + name_(b.name), b);
     }
+    if (marktleitung) {
+      const was = !z ? 'angelegt' : [werte.name !== txt_(z.name) && 'Name', cent_(werte.preis) !== cent_(z.preis) && 'Preis ' + euro_(cent_(werte.preis)).toFixed(2).replace('.', ',') + ' €', werte.kategorie !== txt_(z.kategorie) && 'Kategorie', werte.aktiv !== (nichtNein_(z.aktiv) ? 'JA' : 'NEIN') && (werte.aktiv === 'JA' ? 'aktiviert' : 'deaktiviert'), werte.bild && 'Bild', inhalt.beschreibung !== txt_(z.beschreibung) && 'Beschreibung'].filter(Boolean).join(', ');
+      if (was) protokoll_('Produkte', b, txt_(d.name) + ': ' + was);
+    }
     if (z) Object.keys(werte).forEach(function (k) { setzen_(t, z, k, werte[k]); });
     else anhaengen_(t, [Object.assign({ produkt_id: id }, werte)]);
     return { ok: true, produkt_id: id, bild: werte.bild || (z ? txt_(z.bild) : '') };
@@ -1430,7 +1500,7 @@ function produktSpeichern_(p) {
 }
 
 function kategorieSpeichern_(p) {
-  auth_(p, 3);
+  auth_(p, 4);
   const neu = txt_(p.kategorie), alt = txt_(p.alt);
   if (!neu) throw new Error('Name fehlt.');
   if (/[;,]/.test(neu) || neu.toUpperCase() === 'ALLE') throw new Error('Name ungültig.');
@@ -1469,6 +1539,8 @@ function preisSpeichern_(p) {
   });
 }
 function preisUebernehmen_(b, marktId, produktId, preis) {
+  const pr = tab_('Produkte').zeilen.filter(function (x) { return txt_(x.produkt_id) === txt_(produktId); })[0];
+  protokoll_('Preise', b, (pr ? txt_(pr.name) : produktId) + ' · ' + ((markt_(marktId) || {}).name || '') + ': ' + (preis === null || preis === '' || preis === undefined ? 'Standardpreis' : euro_(preis).toFixed(2).replace('.', ',') + ' €'));
   const t = tab_('Preise');
   const z = t.zeilen.filter(function (x) { return txt_(x.markt_id) === txt_(marktId) && txt_(x.produkt_id) === txt_(produktId); })[0];
   if (preis === null || preis === '' || preis === undefined) { if (z) loeschen_(t, z); return; }
@@ -1528,7 +1600,7 @@ function marktSpeichern_(p) {
       if (!z) throw new Error('Markt nicht gefunden.');
       if (!gleicheGruppe_(b, z.gruppe_id)) throw new Error('Keine Berechtigung.');
       if (!marktAendern_(b, d.markt_id)) return vorschlag_(b, 'markt', txt_(d.markt_id), 'markt:' + txt_(d.markt_id), { titel: 'Änderung Markt ' + txt_(z.name), text: aenderungsText_(z, d, ['name', 'ort', 'datum_von', 'datum_bis']) + (d.archiviert && !ja_(z.archiviert) ? ' archivieren' : ''), markt: d });
-      marktUebernehmen_(d);
+      marktUebernehmen_(d, b);
       if (rang_(b) >= 4 && d.gruppe_id !== undefined) setzen_(tab_('Märkte'), markt_(d.markt_id), 'gruppe_id', gruppeGueltig_(d.gruppe_id));
       return { ok: true, markt_id: txt_(d.markt_id) };
     }
@@ -1536,6 +1608,7 @@ function marktSpeichern_(p) {
     const id = neueId_(t, 'markt_id', 'MK');
     const gruppe = rang_(b) >= 4 && d.gruppe_id !== undefined ? gruppeGueltig_(d.gruppe_id) : txt_(b.gruppe_id);
     anhaengen_(t, [Object.assign({ markt_id: id, gruppe_id: gruppe }, marktWerte_(d))]);
+    protokoll_('Märkte', b, txt_(d.name) + ' angelegt');
     verantwortlichSetzen_('markt', id, b.benutzer_id, b.benutzer_id);
     return { ok: true, markt_id: id };
   });
@@ -1549,10 +1622,12 @@ function marktWerte_(d) {
   const datum = function (v) { return /^\d{4}-\d{2}-\d{2}$/.test(txt_(v)) ? alsText_(txt_(v)) : ''; };
   return { name: txt_(d.name), ort: txt_(d.ort), datum_von: datum(d.datum_von), datum_bis: datum(d.datum_bis || d.datum_von), archiviert: d.archiviert ? 'JA' : 'NEIN' };
 }
-function marktUebernehmen_(d) {
+function marktUebernehmen_(d, b) {
   const t = tab_('Märkte'), z = markt_(d.markt_id);
   if (!z) throw new Error('Markt nicht gefunden.');
   const w = marktWerte_(d);
+  const was = aenderungsText_(z, d, ['name', 'ort', 'datum_von', 'datum_bis']) + (w.archiviert !== (ja_(z.archiviert) ? 'JA' : 'NEIN') ? (w.archiviert === 'JA' ? ' archiviert' : ' aus Archiv') : '');
+  if (was) protokoll_('Märkte', b, txt_(z.name) + ': ' + was);
   Object.keys(w).forEach(function (k) { setzen_(t, z, k, w[k]); });
 }
 function aenderungsText_(alt, neu, felder) {
@@ -1581,13 +1656,14 @@ function standSpeichern_(p) {
         if (!was.length) return { ok: true, stand_id: txt_(d.stand_id) };
         return vorschlag_(b, 'stand', txt_(d.stand_id), 'stand:' + txt_(d.stand_id), { titel: 'Änderung Stand ' + txt_(z.name), text: was.join(', '), stand: d });
       }
-      standUebernehmen_(d);
+      standUebernehmen_(d, b);
       return { ok: true, stand_id: txt_(d.stand_id) };
     }
     if (!marktAendern_(b, d.markt_id)) throw new Error('Nur Marktverantwortliche legen Stände an.');
     const t = tab_('Stände');
     const id = neueId_(t, 'stand_id', 'S');
     anhaengen_(t, [Object.assign({ stand_id: id, markt_id: txt_(d.markt_id) }, standWerte_(d))]);
+    protokoll_('Stände', b, txt_(d.name) + ' angelegt · ' + ((markt_(d.markt_id) || {}).name || ''));
     verantwortlichSetzen_('stand', id, b.benutzer_id, b.benutzer_id);
     return { ok: true, stand_id: id };
   });
@@ -1598,10 +1674,15 @@ function standWerte_(d) {
   return { name: txt_(d.name), kategorien: d.kategorien === 'ALLE' || !Array.isArray(d.kategorien) || !d.kategorien.length ? 'ALLE' : d.kategorien.map(txt_).join(';'),
     standzeiten: zeiten.join('; '), archiviert: d.archiviert ? 'JA' : 'NEIN' };
 }
-function standUebernehmen_(d) {
+function standUebernehmen_(d, b) {
   const t = tab_('Stände'), z = stand_(d.stand_id);
   if (!z) throw new Error('Stand nicht gefunden.');
-  const w = standWerte_(d);
+  const w = standWerte_(d), was = [];
+  if (w.name !== txt_(z.name)) was.push('Name ' + w.name);
+  if (w.standzeiten !== txt_(z.standzeiten)) was.push('Standzeiten');
+  if (w.kategorien !== (txt_(z.kategorien) || 'ALLE')) was.push('Sortiment');
+  if (w.archiviert !== (ja_(z.archiviert) ? 'JA' : 'NEIN')) was.push(w.archiviert === 'JA' ? 'archiviert' : 'aus Archiv');
+  if (was.length) protokoll_('Stände', b, txt_(z.name) + ': ' + was.join(', '));
   Object.keys(w).forEach(function (k) { setzen_(t, z, k, w[k]); });
 }
 
@@ -1645,6 +1726,7 @@ function verantwortung_(p) {
       if (liste.indexOf(wer) < 0) throw new Error('Nicht verantwortlich.');
       if (liste.length <= 1) throw new Error('Die letzte verantwortliche Person kann nicht ausscheiden.');
       setzen_(zt, zeile(wer), 'verantwortlich', '');
+      protokoll_('Verantwortung', b, txt_(obj.name) + ': ' + (namen_()[wer] || '') + (p.modus === 'zuruecktreten' ? ' tritt zurück' : ' entfernt'));
       return { ok: true };
     }
     const ziel = benutzer_(p.ziel_id);
@@ -1670,6 +1752,8 @@ function verantwortungUebernehmen_(b, d) {
   if (z) setzen_(zt, z, 'verantwortlich', 'JA');
   else anhaengen_(zt, [{ art: d.art, ref_id: d.ref, benutzer_id: d.ziel, verantwortlich: 'JA', erstellt_von: txt_(b.benutzer_id), erstellt_am: new Date() }]);
   if (abgebender) { const a = zt.zeilen.filter(function (x) { return txt_(x.art) === d.art && txt_(x.ref_id) === d.ref && txt_(x.benutzer_id) === abgebender; })[0]; if (a) setzen_(zt, a, 'verantwortlich', ''); }
+  const o = d.art === 'markt' ? markt_(d.ref) : stand_(d.ref), n = namen_();
+  protokoll_('Verantwortung', b, (o ? txt_(o.name) : d.ref) + ': ' + (n[d.ziel] || '') + ' übernimmt' + (abgebender ? ' statt ' + (n[abgebender] || '') : ''));
 }
 function verantwortlichSetzen_(art, ref, id, von) {
   const zt = tab_('Zuständigkeiten');
@@ -1841,6 +1925,7 @@ function marktKopieren_(p) {
     pr.zeilen.filter(function (x) { return txt_(x.markt_id) === txt_(alt.markt_id); }).forEach(function (x) {
       anhaengen_(pr, [{ markt_id: mid, produkt_id: txt_(x.produkt_id), preis: x.preis, geaendert_von: txt_(b.benutzer_id), geaendert_am: new Date() }]);
     });
+    protokoll_('Märkte', b, txt_(alt.name) + ' kopiert als ' + (txt_(p.name) || txt_(alt.name)));
     return { ok: true, markt_id: mid, staende: n };
   });
 }
@@ -1912,7 +1997,7 @@ function rueckmeldungenListe_(p) {
   const namen = namen_(), staende = {};
   tab_('Stände').zeilen.forEach(function (z) { staende[txt_(z.stand_id)] = txt_(z.name); });
   return { ok: true, rueckmeldungen: tab_('Rückmeldungen').zeilen.filter(function (z) { return txt_(z.rm_id) && (rang_(b) >= 4 || standRecht_(b, z.stand_id)); }).map(function (z) {
-    return { rm_id: txt_(z.rm_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', stand: staende[txt_(z.stand_id)] || '', typ: txt_(z.typ), text: txt_(z.text), status: txt_(z.status) || 'neu', bild: !!txt_(z.bild) };
+    return { rm_id: txt_(z.rm_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', stand: staende[txt_(z.stand_id)] || '', typ: txt_(z.typ), text: txt_(z.text), status: txt_(z.status) || 'neu', bild: !!txt_(z.bild), eigen: txt_(z.benutzer_id) === txt_(b.benutzer_id) };
   }).sort(function (a, c) { return c.zeit < a.zeit ? -1 : 1; }).slice(0, 100) };
 }
 function rmBild_(p) {
@@ -1932,6 +2017,7 @@ function rueckmeldungStatus_(p) {
   const z = t.zeilen.filter(function (x) { return txt_(x.rm_id) === txt_(p.rm_id); })[0];
   if (!z) throw new Error('Nicht gefunden.');
   if (!(rang_(b) >= 4 || standRecht_(b, z.stand_id))) throw new Error('Keine Berechtigung.');
+  if (txt_(z.benutzer_id) === txt_(b.benutzer_id) && rang_(b) < 4) throw new Error('Eigene Rückmeldungen bearbeitet ein Admin.');
   if (txt_(z.status) !== p.status && txt_(z.benutzer_id) !== txt_(b.benutzer_id)) nachricht_(txt_(z.benutzer_id), 'Rückmeldung: ' + p.status, txt_(z.text).slice(0, 120), b);
   setzen_(t, z, 'status', p.status);
   return { ok: true };
@@ -1940,13 +2026,37 @@ function bonsListe_(p) {
   const b = auth_(p, 2);
   standPruefen_(b, p.stand_id);
   const tag = /^\d{4}-\d{2}-\d{2}$/.test(txt_(p.datum)) ? txt_(p.datum) : heute_();
-  const namen = namen_(), pos = {};
-  spaltenLesen_(kopf_('Positionen'), ['bon_id', 'zeit', 'stand_id', 'produktname', 'menge']).forEach(function (z) {
+  const namen = namen_(), pos = {}, posL = {};
+  spaltenLesen_(kopf_('Positionen'), ['bon_id', 'zeit', 'stand_id', 'produkt_id', 'produktname', 'menge']).forEach(function (z) {
     if (tag_(z.zeit) !== tag || txt_(z.stand_id) !== txt_(p.stand_id)) return;
     (pos[txt_(z.bon_id)] = pos[txt_(z.bon_id)] || []).push((Number(z.menge) || 0) + '× ' + txt_(z.produktname));
+    (posL[txt_(z.bon_id)] = posL[txt_(z.bon_id)] || []).push({ produkt_id: txt_(z.produkt_id), menge: Number(z.menge) || 0 });
   });
   return { ok: true, datum: tag, bons: spaltenLesen_(kopf_('Verkäufe'), ['bon_id', 'zeit', 'stand_id', 'benutzer_id', 'summe', 'status', 'art', 'hinweis', 'bestaetigt_am']).filter(function (z) { return tag_(z.zeit) === tag && txt_(z.stand_id) === txt_(p.stand_id); }).map(function (z) {
-    return { bon_id: txt_(z.bon_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', summe: cent_(z.summe), status: txt_(z.status), art: txt_(z.art), hinweis: txt_(z.hinweis), bestaetigt: !!txt_(z.bestaetigt_am), positionen: (pos[txt_(z.bon_id)] || []).join(', ') };
+    return { bon_id: txt_(z.bon_id), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', summe: cent_(z.summe), status: txt_(z.status), art: txt_(z.art), hinweis: txt_(z.hinweis), bestaetigt: !!txt_(z.bestaetigt_am), positionen: (pos[txt_(z.bon_id)] || []).join(', '), pos: posL[txt_(z.bon_id)] || [], benutzer_id: txt_(z.benutzer_id) };
+  }).sort(function (a, c) { return c.zeit < a.zeit ? -1 : 1; }) };
+}
+
+/* ===================================================================
+   Änderungslog (Admin): je Kategorie die letzten 100, der älteste wird ersetzt
+   =================================================================== */
+const PROTOKOLL_MAX = 100;
+function protokoll_(kategorie, b, text) {
+  try {
+    const t = tab_('Protokoll');
+    const l = t.zeilen.filter(function (z) { return txt_(z.kategorie) === kategorie; });
+    const werte = { kategorie: kategorie, zeit: new Date(), benutzer_id: b ? txt_(b.benutzer_id) : '', text: txt_(text).slice(0, 300) };
+    if (l.length < PROTOKOLL_MAX) { anhaengen_(t, [werte]); return; }
+    const alt = l.reduce(function (a, z) { return new Date(z.zeit) < new Date(a.zeit) ? z : a; });
+    t.sh.getRange(alt._zeile, 1, 1, t.kopf.length).setValues([t.kopf.map(function (h) { return zelle_(werte[h] === undefined ? '' : werte[h]); })]);
+    Object.assign(alt, werte);
+  } catch (err) { console.error('Protokoll', err); }
+}
+function protokollListe_(p) {
+  auth_(p, 4);
+  const namen = namen_();
+  return { ok: true, eintraege: tab_('Protokoll').zeilen.filter(function (z) { return txt_(z.kategorie); }).map(function (z) {
+    return { kategorie: txt_(z.kategorie), zeit: iso_(z.zeit), name: namen[txt_(z.benutzer_id)] || '', text: txt_(z.text) };
   }).sort(function (a, c) { return c.zeit < a.zeit ? -1 : 1; }) };
 }
 

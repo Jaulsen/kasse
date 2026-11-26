@@ -1,4 +1,4 @@
-/* Weihnachtsmarkt-Kasse · App 2.5 · Seiten für Verkauf, Schichten und Standleitung */
+/* Weihnachtsmarkt-Kasse · App 2.6 · Seiten für Verkauf, Schichten und Standleitung */
 'use strict';
 
 /* Vom Server geladene Listen: zuletzt Geladenes sofort zeigen, im Hintergrund aktualisieren */
@@ -33,7 +33,7 @@ function bonKarte(b, kannStorno, extra) {
     <span class="muted">${esc(typeof b.positionen === 'string' ? b.positionen : b.positionen.map(p => p.menge + '× ' + p.produktname).join(', '))}</span>
     ${kannStorno ? (ui.confirm === b.bon_id
       ? `<div class="acts">Stornieren? <button class="btn danger sm" data-storno="${b.bon_id}">Ja</button><button class="btn ghost sm" data-nein>Nein</button></div>`
-      : `<div class="acts"><button class="mini-btn" data-ask="${b.bon_id}">Stornieren</button></div>`) : ''}</div>`;
+      : `<div class="acts"><button class="mini-btn" data-bkorr="${b.bon_id}">Korrigieren</button><button class="mini-btn" data-ask="${b.bon_id}">Stornieren</button></div>`) : ''}</div>`;
 }
 function bindConfirm(root, onYes, attr = 'storno') {
   root.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () => { ui.confirm = b.dataset.ask; render(); }));
@@ -49,7 +49,10 @@ function stornoEnqueue(id, still) {
 P.bons = {
   titel: 'Meine Bons',
   body: () => { const can = stornoable(); const l = myBons().slice(0, 20); return l.length ? l.map(b => bonKarte(b, can.includes(b.bon_id))).join('') : listeLeer('Noch keine Bons'); },
-  bind: root => bindConfirm(root, stornoEnqueue)
+  bind: root => {
+    bindConfirm(root, id => stornoEnqueue(id));
+    root.querySelectorAll('[data-bkorr]').forEach(x => x.addEventListener('click', () => { ui.korr = { bon: S.bons.find(b => b.bon_id === x.dataset.bkorr), zurueck: 'bons' }; go('korrigieren'); }));
+  }
 };
 
 /* ---------- Meine Schichten: eigene Schichten und Eintragen an einem Ort ---------- */
@@ -235,7 +238,7 @@ OV.konflikt = {
 P.plan = {
   stand: false,
   eltern: () => ui.planStand ? 'struktur' : null,
-  titel: () => (leitet(planSid()) ? 'Personalplanung' : 'Schichtplan') + (ui.planStand ? ' · ' + standName(ui.planStand) : ''),
+  titel: () => (leitet(planSid()) ? 'Personal' : 'Schichtplan') + (ui.planStand ? ' · ' + standName(ui.planStand) : ''),
   open: data => {
     if (!(data && data.zurueck)) ui.planStand = data && data.stand_id || null;
     if (!planSid() || !stand(planSid())) { ui.planStand = null; }
@@ -276,7 +279,8 @@ P.plan = {
       ${gesamt.length ? `<p class="lueckentext">Niemand eingeteilt: ${gesamt.map(g => g[0] + '–' + g[1]).join(', ')}</p>` : ''}</div>` : '';
     const kopie = ui.planKopie ? `<div class="card sform kform"><b>${tagText(tag)} kopieren nach</b><div class="chips wrap" id="pk-t">${tage.filter(t => t !== tag && t >= today()).map(t => `<button class="chip" data-kt="${t}" aria-pressed="${ui.planKopie.nach === t}">${tagText(t)}</button>`).join('') || '<span class="muted">Kein weiterer Tag</span>'}</div>
       <div class="acts"><button class="btn ghost sm" data-x="kabbr">Abbrechen</button><button class="btn sm" style="margin-left:auto" data-x="kok" ${ui.planKopie.nach ? '' : 'disabled'}>Kopieren</button></div></div>` : '';
-    return `${tage.length > 1 ? `<div class="chips daytabs">${tage.map(t => `<button class="chip" data-tag="${t}" aria-pressed="${t === tag}">${tagText(t)}</button>`).join('')}</div>` : ''}
+    return `${l ? `<div class="pknoepfe"><button class="btn ghost" data-nav data-pcode>${I.key}<span>Code erzeugen</span></button><button class="btn ghost" data-nav data-peinl>${I.user}<span>Person einladen</span></button></div>` : ''}
+      ${tage.length > 1 ? `<div class="chips daytabs">${tage.map(t => `<button class="chip" data-tag="${t}" aria-pressed="${t === tag}">${tagText(t)}</button>`).join('')}</div>` : ''}
       <p class="muted" style="margin:0">${fmtDate(tag)}${sz ? ' · Stand ' + sz.von + '–' + sz.bis : ''}</p>
       ${kopie}${abdeckung}
       ${neuOffen ? schichtForm() : ''}
@@ -285,6 +289,8 @@ P.plan = {
   leiste: () => ui.planForm || ui.planKopie || !planSid() ? '' : `${leitet(planSid()) && (D.schichten || []).some(s => s.stand_id === planSid() && s.datum === ui.planTag && s.status === 'geplant') ? '<button class="btn ghost" data-kopie>Tag kopieren</button>' : ''}<button class="btn" data-neu>${leitet(planSid()) ? 'Schicht hinzufügen' : 'Mich eintragen'}</button>`,
   bind: root => {
     root.querySelectorAll('[data-tag]').forEach(b => b.addEventListener('click', () => { ui.planTag = b.dataset.tag; ui.planForm = null; ui.planKopie = null; render(); }));
+    const pc = root.querySelector('[data-pcode]'); if (pc) pc.addEventListener('click', () => go('code'));
+    const pe = root.querySelector('[data-peinl]'); if (pe) pe.addEventListener('click', () => go('einladen'));
     const kb = root.querySelector('[data-kopie]'); if (kb) kb.addEventListener('click', () => { ui.planKopie = { nach: '' }; render(); });
     root.querySelectorAll('[data-kt]').forEach(b => b.addEventListener('click', () => { ui.planKopie.nach = b.dataset.kt; render(); }));
     const ka = root.querySelector('[data-x="kabbr"]'); if (ka) ka.addEventListener('click', () => { ui.planKopie = null; render(); });
@@ -377,24 +383,34 @@ const HINWEIS_KNOEPFE = {
 };
 const HINWEIS_TITEL = { verantwortung: 'Verantwortung', registrierung: 'Registrierungen', schicht: 'Schichten und Zugang', verknuepfung: 'Platzhalter zuordnen', aenderung: 'Änderungsvorschläge',
   produktaenderung: 'Produktänderungen', bon: 'Umsätze außerhalb der Regeln', ausverkauft: 'Ausverkauft gemeldet', produkt: 'Produktvorschläge', rueckmeldung: 'Rückmeldungen' };
+/* Wer schreiben darf: Admins an alle, Verantwortliche an ihre Leute */
+function schreibZiele() {
+  if (rang() >= 4) return null;
+  const ich = S.user.benutzer_id, v = (D && D.verantwortung) || {};
+  return Object.keys(v).filter(k => v[k].includes(ich)).map(k => { const [art, ref] = k.split(':'); return { art, ref, name: art === 'markt' ? ((MAERKTE().find(m => m.markt_id === ref) || {}).name || '') : standName(ref) }; }).filter(z => z.name);
+}
+const darfSchreiben = () => { const z = schreibZiele(); return z === null || z.length > 0; };
 P.hinweise = {
   titel: 'Nachrichten',
-  open: () => { ui.fremd = false; },
+  open: () => { ui.fremd = false; ui.gelesene = false; ui.nBild = ui.nBild || {}; },
   kopf: () => fremdeHinweise().length ? `<div class="seg mini"><button data-fr="0" aria-pressed="${!ui.fremd}">Meine</button><button data-fr="1" aria-pressed="${!!ui.fremd}">Andere <span class="grauzahl">${fremdeHinweise().length}</span></button></div>` : '',
   body: () => {
     const l = (D.hinweise || []).filter(h => !!h.fremd === !!ui.fremd);
     const msgs = ui.fremd ? [] : (D.nachrichten || []);
-    if (!l.length && !msgs.length) return `<div class="leer-ok">${I.check}<p>Alles erledigt</p></div>`;
+    const neu = msgs.filter(n => !n.gelesen), alt = msgs.filter(n => n.gelesen);
+    if (!l.length && !neu.length && !(ui.gelesene && alt.length)) return `<div class="leer-ok">${I.check}<p>Alles erledigt</p></div>${alt.length ? `<button class="mini-btn" style="align-self:center" data-gel>Gelesene (${alt.length})</button>` : ''}`;
     const karte = h => `<div class="card">
       <div class="hd"><b>${esc(h.titel)}</b>${h.zeit ? `<span class="muted">${fmtTime(h.zeit)}</span>` : ''}</div>
-      <span class="muted">${esc(h.text)}${h.stand ? ' · ' + esc(h.stand) : ''}</span>
+      <span class="muted vorz">${esc(h.text)}${h.stand ? ' · ' + esc(h.stand) : ''}</span>
       <div class="acts"><button class="btn sm" data-h="${D.hinweise.indexOf(h)}" data-a="ja">${HINWEIS_KNOEPFE[h.typ][0]}</button><button class="btn ghost sm" data-h="${D.hinweise.indexOf(h)}" data-a="nein">${HINWEIS_KNOEPFE[h.typ][1]}</button></div></div>`;
     const todo = Object.keys(HINWEIS_TITEL).filter(t => l.some(h => h.typ === t)).map(t => `<h3 class="sub">${HINWEIS_TITEL[t]}</h3>` + l.filter(h => h.typ === t).map(karte).join('')).join('');
-    const neu = msgs.filter(n => !n.gelesen), alt = msgs.filter(n => n.gelesen);
-    const mk = n => `<div class="card msg${n.gelesen ? ' gelesen' : ''}"><div class="hd"><b>${esc(n.titel)}</b><span class="muted">${fmtTime(n.am)}</span></div>${n.text ? `<span>${esc(n.text)}</span>` : ''}${n.von ? `<span class="muted">${esc(n.von)}</span>` : ''}${n.gelesen ? '' : `<div class="acts"><button class="btn ghost sm" data-ok="${esc(n.id)}">OK</button></div>`}</div>`;
-    return todo + (msgs.length ? `<h3 class="sub">Mitteilungen${neu.length > 1 ? ` <button class="mini-btn" data-alle>Alle gelesen</button>` : ''}</h3>${neu.map(mk).join('')}${alt.map(mk).join('')}` : '');
+    const mk = n => `<div class="card msg${n.gelesen ? ' gelesen' : ''}"><div class="hd"><b>${esc(n.titel)}</b><span class="muted">${fmtTime(n.am)}</span></div>${n.text ? `<span class="vorz">${esc(n.text)}</span>` : ''}
+      ${n.bild ? (ui.nBild[n.id] ? `<button class="zoom" data-zoom="${esc(ui.nBild[n.id])}"><img class="rmfoto" src="${ui.nBild[n.id]}" alt="Foto"></button>` : `<button class="mini-btn" style="align-self:flex-start;margin:0" data-nb="${esc(n.id)}">Foto zeigen</button>`) : ''}
+      ${n.von ? `<span class="muted">${esc(n.von)}</span>` : ''}${n.gelesen ? '' : `<div class="acts"><button class="btn ghost sm" data-ok="${esc(n.id)}">OK</button></div>`}</div>`;
+    return todo + (msgs.length ? `<h3 class="sub">Mitteilungen${neu.length > 1 ? ` <button class="mini-btn" data-alle>Alle gelesen</button>` : ''}</h3>${neu.map(mk).join('')}
+      ${alt.length ? `<button class="mini-btn" style="align-self:flex-start;margin:0" data-gel>${ui.gelesene ? 'Gelesene ausblenden' : 'Gelesene (' + alt.length + ')'}</button>` : ''}${ui.gelesene ? alt.map(mk).join('') : ''}` : '');
   },
-  leiste: () => rang() >= 4 ? '<button class="btn ghost wide" data-go="rundschreiben">Nachricht schreiben</button>' : '',
+  leiste: () => darfSchreiben() ? '<button class="btn ghost wide" data-go="rundschreiben">Nachricht schreiben</button>' : '',
   bind: root => {
     root.querySelectorAll('[data-fr]').forEach(b => b.addEventListener('click', () => { ui.fremd = b.dataset.fr === '1'; render(); }));
     root.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => {
@@ -404,38 +420,64 @@ P.hinweise = {
     }));
     root.querySelectorAll('[data-ok]').forEach(b => b.addEventListener('click', () => { aktion('nachricht_gelesen', { id: b.dataset.ok }); render(); }));
     const a = root.querySelector('[data-alle]'); if (a) a.addEventListener('click', () => { aktion('nachricht_gelesen', { id: 'alle' }); render(); });
+    root.querySelectorAll('[data-gel]').forEach(b => b.addEventListener('click', () => { ui.gelesene = !ui.gelesene; render(); }));
+    root.querySelectorAll('[data-nb]').forEach(b => b.addEventListener('click', () => tue(b, async () => { const r = await call({ aktion: 'nachricht_bild', id: b.dataset.nb }); if (r.ok) { ui.nBild[b.dataset.nb] = 'data:' + r.mime + ';base64,' + r.data; render(); } })));
+    root.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => { ui.zoom = b.dataset.zoom; go('bild'); }));
   }
 };
 
-/* ---------- Nachricht schreiben (Admin) ---------- */
+/* ---------- Nachricht schreiben: Admins an alle, Verantwortliche an ihre Leute ---------- */
 P.rundschreiben = {
   form: true, eltern: 'hinweise', verwerfen: () => { ui.rs = null; },
   titel: 'Nachricht schreiben',
-  open: () => { ui.rs = ui.rs || { art: 'alle', wert: '' }; },
+  open: () => {
+    const z = schreibZiele();
+    ui.rs = ui.rs || (z === null ? { art: 'alle', wert: '' } : { art: z[0] ? z[0].art : 'stand', wert: z[0] ? z[0].ref : '' });
+    ui.rs.auswahl = ui.rs.auswahl || []; ui.rs.leute = null; rsLeuteLaden();
+  },
   body: () => {
-    const r = ui.rs;
-    const wahl = r.art === 'rolle' ? Object.keys(ROLLEN).map(x => [x, x]) : r.art === 'gruppe' ? GRUPPEN_L().map(g => [g.gruppe_id, g.name]) : r.art === 'markt' ? MAERKTE().map(m => [m.markt_id, m.name]) : r.art === 'stand' ? STAENDE().map(st => [st.stand_id, st.name + ' · ' + ((marktVon(st) || {}).name || '')]) : [];
-    if (wahl.length && !wahl.some(w => w[0] === r.wert)) r.wert = wahl[0][0];
-    return `<div class="field"><label>An</label><div class="seg" id="rs-a">${[['alle', 'Alle']].concat(GRUPPEN_L().length ? [['gruppe', GRUPPE]] : [], [['rolle', 'Rolle'], ['markt', 'Markt'], ['stand', 'Stand']]).map(([k, t]) => `<button data-art="${k}" aria-pressed="${r.art === k}">${t}</button>`).join('')}</div></div>
-      ${wahl.length ? `<div class="field"><select id="rs-w" aria-label="Auswahl">${optionen(wahl, r.wert)}</select></div>` : ''}
+    const r = ui.rs, z = schreibZiele();
+    const arten = z === null ? [['alle', 'Alle']].concat(GRUPPEN_L().length ? [['gruppe', GRUPPE]] : [], [['rolle', 'Rolle'], ['markt', 'Markt'], ['stand', 'Stand'], ['personen', 'Personen']]) : [];
+    const wahl = z !== null ? z.map(x => [x.art + ':' + x.ref, (x.art === 'markt' ? 'Markt ' : 'Stand ') + x.name])
+      : r.art === 'rolle' ? Object.keys(ROLLEN).map(x => [x, x]) : r.art === 'gruppe' ? GRUPPEN_L().map(g => [g.gruppe_id, g.name]) : r.art === 'markt' ? MAERKTE().map(m => [m.markt_id, m.name]) : r.art === 'stand' ? STAENDE().map(st => [st.stand_id, st.name + ' · ' + ((marktVon(st) || {}).name || '')]) : [];
+    const wert = z !== null ? r.art + ':' + r.wert : r.wert;
+    if (z === null && wahl.length && !wahl.some(w => w[0] === r.wert)) r.wert = wahl[0][0];
+    const leute = r.leute;
+    return `${arten.length ? `<div class="field"><label>An</label><div class="seg" id="rs-a">${arten.map(([k, t]) => `<button data-art="${k}" aria-pressed="${r.art === k}">${t}</button>`).join('')}</div></div>` : ''}
+      ${wahl.length ? `<div class="field">${z !== null ? '<label for="rs-w">An die Leute von</label>' : ''}<select id="rs-w" aria-label="Auswahl">${optionen(wahl, wert)}</select></div>` : ''}
+      ${['stand', 'markt', 'personen'].includes(r.art) ? `<div class="field"><label>${r.art === 'personen' ? 'Personen' : 'Nur an'} · ${r.auswahl.length ? r.auswahl.length + ' gewählt' : r.art === 'personen' ? 'niemand gewählt' : 'alle'}</label>
+        <div class="leute">${leute ? leute.map(p => `<label class="check"><input type="checkbox" data-pp="${esc(p.benutzer_id)}" ${r.auswahl.includes(p.benutzer_id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('') || '<span class="muted">Niemand</span>' : ladeHtml}</div></div>` : ''}
       <div class="field"><label for="rs-t">Betreff</label><input id="rs-t" value="${esc(r.titel || '')}"></div>
-      <div class="field"><label for="rs-x">Text</label><textarea id="rs-x" rows="6">${esc(r.text || '')}</textarea></div>
-      <p class="muted" style="margin:0">Markt und Stand: alle Zuständigen, Eingeplanten und Personen mit Aufgaben dort.</p>`;
+      <div class="field"><label for="rs-x">Text</label><textarea id="rs-x" class="fest" rows="6">${esc(r.text || '')}</textarea></div>
+      <div class="field"><label>Foto</label><div class="imgedit">${r.bild ? `<img src="${r.bild}" alt=""><button class="mini-btn" data-rbx>Entfernen</button>` : '<span class="ph">kein Foto</span>'}<label class="mini-btn">${r.bild ? 'Anderes' : 'Foto'}<input type="file" accept="image/*" id="rs-b" hidden></label></div></div>`;
   },
   leiste: () => '<button class="btn wide" data-send>Senden</button>',
   bind: root => {
-    const r = ui.rs;
-    const erfassen = () => { r.titel = val(root, '#rs-t'); r.text = root.querySelector('#rs-x').value.trim(); if (root.querySelector('#rs-w')) r.wert = val(root, '#rs-w'); };
-    root.querySelectorAll('[data-art]').forEach(b => b.addEventListener('click', () => { erfassen(); r.art = b.dataset.art; render(); }));
+    const r = ui.rs, z = schreibZiele();
+    const erfassen = () => {
+      r.titel = val(root, '#rs-t'); r.text = root.querySelector('#rs-x').value.trim();
+      const w = root.querySelector('#rs-w');
+      if (w) { if (z !== null) { const [a, ref] = w.value.split(':'); r.art = a; r.wert = ref; } else r.wert = w.value; }
+    };
+    root.querySelectorAll('[data-art]').forEach(b => b.addEventListener('click', () => { erfassen(); r.art = b.dataset.art; r.auswahl = []; r.leute = null; render(); rsLeuteLaden(); }));
+    const w = root.querySelector('#rs-w'); if (w) w.addEventListener('change', () => { erfassen(); r.auswahl = []; r.leute = null; render(); rsLeuteLaden(); });
+    root.querySelectorAll('[data-pp]').forEach(c => c.addEventListener('change', () => { const id = c.dataset.pp; r.auswahl = c.checked ? r.auswahl.concat(id) : r.auswahl.filter(x => x !== id); erfassen(); render(); }));
+    root.querySelector('#rs-b').addEventListener('change', async e => { erfassen(); const f = e.target.files[0]; if (!f) return; try { r.bild = await bildVerkleinern(f, 1280, 1280, false); } catch (x) { toast('Foto nicht lesbar'); } render(); });
+    const bx = root.querySelector('[data-rbx]'); if (bx) bx.addEventListener('click', () => { erfassen(); r.bild = null; render(); });
     const b = root.querySelector('[data-send]');
     b.addEventListener('click', () => tue(b, async () => {
       erfassen();
       if (!r.titel) return toast('Betreff fehlt');
-      const x = await call({ aktion: 'nachricht_senden', titel: r.titel, text: r.text, ziel: { art: r.art, wert: r.wert } }, true);
-      if (x.ok) { ui.rs = null; toast('An ' + x.anzahl + ' Personen gesendet'); go('hinweise', { zurueck: true }); sync(); }
+      if (r.art === 'personen' && !r.auswahl.length) return toast('Personen auswählen');
+      const x = await call({ aktion: 'nachricht_senden', titel: r.titel, text: r.text, ziel: { art: r.art, wert: r.wert }, personen: r.auswahl, bild: r.bild ? r.bild.split(',')[1] : '' }, true);
+      if (x.ok) { ui.rs = null; ui.dirty = false; toast('An ' + x.anzahl + ' Personen gesendet'); go('hinweise', { zurueck: true }); sync(); }
     }));
   }
 };
+async function rsLeuteLaden() {
+  const r = ui.rs; if (!r || !['stand', 'markt', 'personen'].includes(r.art)) return;
+  try { const x = await api({ aktion: 'empfaenger', ziel: { art: r.art, wert: r.wert } }); if (ui.rs === r) { r.leute = x.ok ? x.personen : []; if (ui.page === 'rundschreiben') render(); } } catch (e) { r.leute = []; }
+}
 
 /* ---------- Meine Aufgaben (aus Checklisten) ---------- */
 const ortName = c => c.art === 'markt' ? ((MAERKTE().find(m => m.markt_id === c.ref_id) || {}).name || '') : standName(c.ref_id);
@@ -575,7 +617,7 @@ P.uebersicht = {
 P.heute = {
   stand: true, key: 'uebersicht',
   titel: () => standName(),
-  open: () => { if (!leitet()) return 'schichten'; if (rang() >= 3) laden('uebersicht', { aktion: 'uebersicht', stand_id: S.stand_id }); },
+  open: () => { if (!leitet()) return 'schichten'; },
   body: () => {
     const st = stand(), t = today(), m = nowMin();
     const sz = (st.standzeiten || []).find(z => z.datum === t);
@@ -587,19 +629,16 @@ P.heute = {
     const aus = sortimentFor(st).filter(p => availOf(st.stand_id, p.produkt_id) !== 'verfuegbar');
     const ck = ((D && D.checklisten) || []).filter(c => c.art === 'stand' && c.ref_id === st.stand_id);
     const person = s => `<div class="hzeile"><b>${esc(s.name)}</b><span>${esc(s.aufgabe)} · ${s.von}–${s.bis}</span></div>`;
-    const umsatz = rang() >= 3 && L.uebersicht && L.uebersicht.ok ? (L.uebersicht.staende[S.stand_id] || { bons: 0, summe: 0 }) : null;
     return `${!sz ? '<div class="banner">Heute keine Standzeit</div>' : ''}
-      ${umsatz ? `<div class="stats"><div class="stat"><small>Umsatz heute</small><b class="num">${eur(umsatz.summe)}</b></div><div class="stat"><small>Bons</small><b class="num">${umsatz.bons}</b></div></div>` : ''}
       ${offen.length ? `<button class="hkarte warn" data-nav data-hz="hinweise"><b>${offen.length}</b><span>zu bestätigen</span>${I.back}</button>` : ''}
       <h3 class="sub">Jetzt da</h3>${jetzt.map(person).join('') || '<p class="muted" style="margin:0">Niemand</p>'}
       ${bald.length ? `<h3 class="sub">Gleich</h3>${bald.map(person).join('')}` : ''}
       ${gaps.length ? `<h3 class="sub">Niemand eingeteilt</h3><div class="vlist">${gaps.map(g => `<span class="pill st">${g[0]}–${g[1]}</span>`).join('')}</div>` : ''}
       ${aus.length ? `<h3 class="sub">Nicht verfügbar</h3>${aus.map(p => `<div class="hzeile"><b>${esc(p.name)}</b><span>${availOf(st.stand_id, p.produkt_id) === 'nicht_da' ? 'ausgeblendet' : 'ausverkauft'}</span><button class="mini-btn" data-wieder="${esc(p.produkt_id)}">Wieder da</button></div>`).join('')}` : ''}
       <div class="menu">
-        <button class="item" data-nav data-hz="plan"><span class="ic">${I.cal}</span><span>Personalplanung</span></button>
-        <button class="item" data-nav data-hz="personal"><span class="ic">${I.users}</span><span>Codes & Einladen</span></button>
+        <button class="item" data-nav data-hz="plan"><span class="ic">${I.users}</span><span>Personal</span></button>
         <button class="item" data-nav data-hz="checkliste"><span class="ic">${I.list}</span><span>Checkliste</span>${ck.length ? `<small style="margin-left:auto">${ck.filter(c => c.erledigt).length}/${ck.length}</small>` : ''}</button>
-        <button class="item" data-nav data-hz="standbons"><span class="ic">${I.receipt}</span><span>Bons & Storno</span></button>
+        <button class="item" data-nav data-hz="standbons"><span class="ic">${I.receipt}</span><span>Bons verwalten</span></button>
         <button class="item" data-nav data-hz="standedit"><span class="ic">${I.edit}</span><span>Stand einrichten</span></button>
         ${rang() >= 3 ? `<button class="item" data-nav data-hz="struktur"><span class="ic">${I.pin}</span><span>Märkte & Stände</span></button>` : ''}
       </div>`;
@@ -613,80 +652,106 @@ P.heute = {
   }
 };
 
-/* ---------- Personalverwaltung: freischalten und einladen ---------- */
-const codesLaden = () => leitet() ? laden('personal', { aktion: 'personal', stand_id: S.stand_id }) : null;
-P.personal = {
-  key: 'personal',
-  get form() { return !!(document.activeElement && document.activeElement.id === 'ei-n'); },
-  titel: 'Personalverwaltung',
-  open: () => { ui.neuerCode = null; ui.einladung = null; codesLaden(); },
-  body: () => `${leitet() ? `<h3 class="sub">Heute freischalten · ${esc(standName())}</h3>
-    ${ui.neuerCode ? `<div class="codebox"><small>Einmalcode · gilt heute</small><b class="num">${fmtCode(ui.neuerCode)}</b></div>` : ''}
-    <button class="btn wide" data-code>Neuen Code erzeugen</button>
-    ${geladen('personal', x => x.codes.slice().reverse().map(c => `<div class="card">
+/* ---------- Personal: Code erzeugen und Person einladen als Fenster ---------- */
+P.personal = { titel: 'Personal', open: () => 'plan', body: () => '' };
+async function codesLaden() {
+  const sid = planSid();
+  if (!sid || !leitet(sid)) return;
+  try { const r = await api({ aktion: 'personal', stand_id: sid }); if (r.ok) { ui.codes = r.codes; if (ui.overlay === 'code') render(); } } catch (e) {}
+}
+OV.code = {
+  open: () => { ui.neuerCode = null; ui.codes = null; ui.confirm = null; codesLaden(); },
+  titel: () => 'Code · ' + standName(planSid()),
+  body: () => `${ui.neuerCode ? `<div class="codebox"><small>Einmalcode · gilt heute</small><b class="num">${fmtCode(ui.neuerCode)}</b></div>` : ''}
+    ${ui.codes ? (ui.codes.length ? ui.codes.slice().reverse().map(c => `<div class="card">
       <div class="hd"><b class="num">${fmtCode(c.code)}</b><span class="pill ${c.entzogen ? 'st' : c.offen ? 'q' : 'ok'}">${c.entzogen ? 'entzogen' : c.offen ? 'offen' : esc(c.eingeloest_name)}</span></div>
-      ${!c.entzogen ? `<div class="acts">${ui.confirm === c.code ? `Freischaltung entziehen? <button class="btn danger sm" data-entz="${c.code}">Ja</button><button class="btn ghost sm" data-nein>Nein</button>` : `<button class="mini-btn" data-ask="${c.code}">Entziehen</button>`}
-        ${!c.offen ? `<button class="mini-btn" data-plan="${esc(c.benutzer_id)}">In Plan eintragen</button>` : ''}</div>` : ''}</div>`).join(''))}` : ''}
-    <h3 class="sub">Neue Person einladen</h3>
-    ${ui.einladung ? `<div class="card"><b>${esc(ui.einladung.name)}${ui.einladung.gruppe ? ' · ' + esc(ui.einladung.gruppe) : ''}</b><span class="muted">Link gilt 24 Stunden · Freigabe danach über die Glocke</span><div class="linkbox">${esc(ui.einladung.url)}</div>
-        <div class="acts"><button class="btn sm" data-teilen>${navigator.share ? 'Link teilen' : 'Link kopieren'}</button><button class="btn ghost sm" data-weitere>Weitere Person</button></div></div>`
-      : `${rang() >= 4 && GRUPPEN_L().length ? `<div class="field"><select id="ei-g" aria-label="${GRUPPE}">${optionen(GRUPPEN_L().map(g => [g.gruppe_id, g.name]), S.user.gruppe_id)}</select></div>` : ''}<div class="einlad"><input id="ei-n" placeholder="Name" autocapitalize="words" autocomplete="off" aria-label="Name der Person"><button class="btn sm" data-einladen>Link erstellen</button></div>`}`,
+      ${!c.entzogen ? `<div class="acts">${ui.confirm === c.code ? `Entziehen? <button class="btn danger sm" data-entz="${c.code}">Ja</button><button class="btn ghost sm" data-nein>Nein</button>` : `<button class="mini-btn" data-ask="${c.code}">Entziehen</button>`}
+        ${!c.offen ? `<button class="mini-btn" data-plan="${esc(c.benutzer_id)}">In Plan eintragen</button>` : ''}</div>` : ''}</div>`).join('') : '') : ladeHtml}`,
+  footer: () => `<button class="btn ghost" data-close>Schließen</button><button class="btn" style="flex:1" data-x="neu">Neuen Code erzeugen</button>`,
   bind: root => {
-    const b = root.querySelector('[data-code]');
-    if (b) b.addEventListener('click', () => tue(b, async () => {
-      const r = await call({ aktion: 'code_erzeugen', stand_id: S.stand_id }, true);
+    const b = root.querySelector('[data-x="neu"]');
+    b.addEventListener('click', () => tue(b, async () => {
+      const r = await call({ aktion: 'code_erzeugen', stand_id: planSid() }, true);
       if (r.ok) { ui.neuerCode = r.code; render(); codesLaden(); }
     }));
     bindConfirm(root, code => {
-      const c = ((L.personal || {}).codes || []).find(x => x.code === code); if (c) c.entzogen = true; render();
+      const c = (ui.codes || []).find(x => x.code === code); if (c) c.entzogen = true; render();
       call({ aktion: 'zugang_entziehen', code }, true).then(codesLaden);
     }, 'entz');
-    root.querySelectorAll('[data-plan]').forEach(x => x.addEventListener('click', () => go('plan', { benutzer_id: x.dataset.plan })));
-    const e = root.querySelector('[data-einladen]');
-    if (e) e.addEventListener('click', () => {
+    root.querySelectorAll('[data-plan]').forEach(x => x.addEventListener('click', () => { ui.overlay = null; ui.planForm = { benutzer_id: x.dataset.plan, modus: 'b' }; render(); }));
+  }
+};
+OV.einladen = {
+  form: true,
+  open: () => { ui.einladung = null; },
+  titel: () => 'Person einladen',
+  body: () => ui.einladung
+    ? `<div class="card"><b>${esc(ui.einladung.name)}${ui.einladung.gruppe ? ' · ' + esc(ui.einladung.gruppe) : ''}</b><span class="muted">Link gilt 24 Stunden · Freigabe danach über die Glocke</span><div class="linkbox">${esc(ui.einladung.url)}</div></div>`
+    : `${rang() >= 4 && GRUPPEN_L().length ? `<div class="field"><label for="ei-g">${GRUPPE}</label><select id="ei-g">${optionen(GRUPPEN_L().map(g => [g.gruppe_id, g.name]), S.user.gruppe_id)}</select></div>` : ''}
+      <div class="field"><label for="ei-n">Name</label><input id="ei-n" autocapitalize="words" autocomplete="off"></div>`,
+  footer: () => ui.einladung
+    ? `<button class="btn ghost" data-x="weitere">Weitere</button><button class="btn" style="flex:1" data-x="kopieren">Link kopieren</button>${navigator.share ? '<button class="btn blue" data-x="teilen">Teilen</button>' : ''}`
+    : `<button class="btn ghost" data-close>Abbrechen</button><button class="btn" style="flex:1" data-x="erstellen">Link erstellen</button>`,
+  bind: root => {
+    const x = (k, f) => { const b = root.querySelector(`[data-x="${k}"]`); if (b) b.addEventListener('click', () => f(b)); };
+    x('erstellen', b => {
       const name = val(root, '#ei-n').replace(/\s+/g, ' '); if (name.length < 2) return toast('Name fehlt');
       const gruppe_id = val(root, '#ei-g') || undefined;
-      tue(e, async () => { const r = await call({ aktion: 'einladung_erstellen', name, gruppe_id }, true); if (r.ok) { ui.einladung = { name: r.name, url: location.origin + location.pathname + '?e=' + r.token, gruppe: gruppeName(gruppe_id || S.user.gruppe_id) }; render(); } });
+      tue(b, async () => { const r = await call({ aktion: 'einladung_erstellen', name, gruppe_id }, true); if (r.ok) { ui.einladung = { name: r.name, url: location.origin + location.pathname + '?e=' + r.token, gruppe: gruppeName(gruppe_id || S.user.gruppe_id) }; render(); } });
     });
-    const w = root.querySelector('[data-weitere]'); if (w) w.addEventListener('click', () => { ui.einladung = null; render(); });
-    const t = root.querySelector('[data-teilen]');
-    if (t) t.addEventListener('click', async () => {
+    x('weitere', () => { ui.einladung = null; render(); });
+    // Kopieren: nur der Link; Teilen: Text mit Link (iOS kopiert sonst nur den Text)
+    x('kopieren', async () => {
       const u = ui.einladung.url;
-      if (navigator.share) { try { await navigator.share({ title: E().app_titel, text: 'Einladung für ' + ui.einladung.name, url: u }); } catch (x) {} }
-      else { try { await navigator.clipboard.writeText(u); toast('Kopiert'); } catch (x) { toast('Link markieren und kopieren'); } }
+      try { await navigator.clipboard.writeText(u); toast('Link kopiert'); }
+      catch (e) { const box = root.querySelector('.linkbox'); const r = document.createRange(); r.selectNodeContents(box); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); toast('Link markiert · kopieren'); }
     });
+    x('teilen', async () => { try { await navigator.share({ text: 'Einladung für ' + ui.einladung.name + ' zur Kassen-App: ' + ui.einladung.url }); } catch (e) {} });
   }
 };
 
-/* ---------- Bons & Storno des Stands ---------- */
-const standBonsLaden = () => laden('standbons', { aktion: 'bons_liste', stand_id: S.stand_id, datum: ui.bonsTag });
+/* ---------- Bons verwalten (Stand): Storno, Korrektur, Nachtrag ---------- */
+/* offene Bons/Stornos zuerst übertragen, sonst zeigt die Liste den alten Stand */
+async function standBonsLaden() {
+  for (let i = 0; i < 40 && (net.syncing || S.queue.some(q => q.typ === 'Bon' || q.typ === 'Storno')) && navigator.onLine !== false; i++) {
+    if (!net.syncing) { try { await sync(); } catch (e) {} if (S.queue.some(q => q.typ === 'Bon' || q.typ === 'Storno')) break; }
+    else await new Promise(r => setTimeout(r, 300));
+  }
+  if (ui.page === 'standbons') return laden('standbons', { aktion: 'bons_liste', stand_id: S.stand_id, datum: ui.bonsTag });
+}
 P.standbons = {
   stand: true, key: 'standbons',
-  titel: 'Bons des Stands',
+  titel: 'Bons verwalten',
   open: () => { ui.bonsTag = ui.bonsTag || today(); if (L.standbons && L.standbons.datum !== ui.bonsTag) L.standbons = null; standBonsLaden(); },
-  body: () => `<div class="field"><input type="date" id="bt" value="${esc(ui.bonsTag)}" aria-label="Tag"></div>` + geladen('standbons', x => {
+  body: () => `<div class="formrow"><div class="field"><input type="date" id="bt" value="${esc(ui.bonsTag)}" aria-label="Tag"></div><button class="btn ghost" data-nav data-nt>${I.plus}<span>Nachtrag</span></button></div>` + geladen('standbons', x => {
     const ok = x.bons.filter(b => b.status === 'ok');
-    return `<div class="stats">${rang() >= 3 ? `<div class="stat"><small>Umsatz</small><b class="num">${eur(ok.reduce((a, b) => a + b.summe, 0))}</b></div>` : ''}<div class="stat"><small>Bons</small><b class="num">${ok.length}</b></div></div>` +
+    return (rang() >= 3 ? `<div class="stats"><div class="stat"><small>Umsatz</small><b class="num">${eur(ok.reduce((a, b) => a + b.summe, 0))}</b></div><div class="stat"><small>Bons</small><b class="num">${ok.length}</b></div></div>` : '') +
       (x.bons.length ? x.bons.map(b => bonKarte(b, b.status === 'ok', b.name + (b.hinweis ? ' · ' + b.hinweis + (b.bestaetigt ? ' ✓' : '') : ''))).join('') : listeLeer('Keine Bons'));
   }),
   bind: root => {
     root.querySelector('#bt').addEventListener('change', e => { ui.bonsTag = e.target.value; L.standbons = null; render(); standBonsLaden(); });
+    root.querySelector('[data-nt]').addEventListener('click', () => go('nachtrag'));
     bindConfirm(root, id => {
       const b = ((L.standbons || {}).bons || []).find(x => x.bon_id === id); if (b) b.status = 'storniert';
       stornoEnqueue(id);
+      standBonsLaden();
     });
+    root.querySelectorAll('[data-bkorr]').forEach(x => x.addEventListener('click', () => {
+      const b = ((L.standbons || {}).bons || []).find(y => y.bon_id === x.dataset.bkorr); if (!b) return;
+      ui.korr = { bon: Object.assign({ stand_id: S.stand_id }, b), zurueck: 'standbons' }; go('korrigieren');
+    }));
   }
 };
 
-/* ---------- Nachtrag ---------- */
-P.nachtrag = {
-  stand: true, form: true,
-  titel: 'Nachtrag erfassen',
-  body: () => { const n = new Date(); n.setMinutes(n.getMinutes() - n.getTimezoneOffset()); return `<p class="muted" style="margin:0">${esc(standName())}</p><div class="formrow"><div class="field"><label for="nt-d">Datum</label><input type="date" id="nt-d" value="${n.toISOString().slice(0, 10)}"></div><div class="field"><label for="nt-t">Uhrzeit</label><input type="time" id="nt-t" value="${n.toISOString().slice(11, 16)}"></div></div>`; },
-  leiste: () => '<button class="btn wide" data-nt>Weiter zur Kasse</button>',
-  bind: root => root.querySelector('[data-nt]').addEventListener('click', () => {
+/* ---------- Nachtrag: Datum und Uhrzeit wählen, dann Kasse ---------- */
+OV.nachtrag = {
+  form: true,
+  titel: () => 'Nachtrag · ' + standName(),
+  body: () => { const n = jetzt(); n.setMinutes(n.getMinutes() - n.getTimezoneOffset()); return `<div class="formrow"><div class="field"><label for="nt-d">Datum</label><input type="date" id="nt-d" value="${n.toISOString().slice(0, 10)}"></div><div class="field"><label for="nt-t">Uhrzeit</label><input type="time" id="nt-t" value="${n.toISOString().slice(11, 16)}"></div></div>`; },
+  footer: () => '<button class="btn ghost" data-close>Abbrechen</button><button class="btn" style="flex:1" data-x="weiter">Weiter zur Kasse</button>',
+  bind: root => root.querySelector('[data-x="weiter"]').addEventListener('click', () => {
     const d = val(root, '#nt-d'), t = val(root, '#nt-t'); if (!d || !t) return;
-    S.nachtrag = { zeit: new Date(d + 'T' + t).toISOString(), stand_id: S.stand_id }; S.cart = {}; home();
+    S.nachtrag = { zeit: new Date(d + 'T' + t).toISOString(), stand_id: S.stand_id }; S.korrektur = null; S.cart = {}; ui.service = false; ui.overlay = null; home();
   })
 };
 
@@ -724,12 +789,14 @@ P.anzeige = {
     const muster = p.length ? p : PRODS().slice(0, 3);
     return `<div class="field"><label>Schrift</label><div class="seg big">${[[1, 'Normal'], [2, 'Groß'], [3, 'Sehr groß']].map(([v, l]) => `<button data-sch="${v}" aria-pressed="${(S.schrift || 1) === v}">${l}</button>`).join('')}</div></div>
       <div class="field"><label>Kacheln</label><div class="seg big">${[[1, 'Klein'], [2, 'Normal'], [3, 'Groß']].map(([v, l]) => `<button data-ka="${v}" aria-pressed="${(S.kachel || 2) === v}">${l}</button>`).join('')}</div></div>
-      <h3 class="sub">Vorschau</h3>
-      <div class="vorschau"><div class="grid">${muster.map(x => `<div class="cell"><div class="tile"><span class="pic" style="background:${esc(kat(x.kategorie).farbe || '#5E6A61')}">${x.bild && imgUrl('bilder', x.bild) ? `<img src="${imgUrl('bilder', x.bild)}" alt="">` : esc(initials(x.name))}</span><span class="tx"><span class="nm">${esc(x.name)}</span><span class="pr num">${eur(preis(x))}</span></span></div></div>`).join('')}</div>
+      <div class="vorschau"><small class="vtitel">Vorschau</small><div class="grid">${muster.map(x => `<div class="cell"><div class="tile"><span class="pic" style="background:${esc(kat(x.kategorie).farbe || '#5E6A61')}">${x.bild && imgUrl('bilder', x.bild) ? `<img src="${imgUrl('bilder', x.bild)}" alt="">` : esc(initials(x.name))}</span><span class="tx"><span class="nm">${esc(x.name)}</span><span class="pr num">${eur(preis(x))}</span></span></div></div>`).join('')}</div>
         <div class="bar"><div class="sum"><small>3 Artikel</small><b class="num">${eur(muster.reduce((a, x) => a + preis(x), 0))}</b></div><span class="btn">Kassieren</span></div></div>
+      <div class="pknoepfe"><button class="btn ghost" data-rg>${I.info}<span>Rundgang</span></button>${UEBUNG ? '' : `<button class="btn ghost" data-ueb>${I.play}<span>Üben</span></button>`}</div>
       ${installMoeglich() ? '<button class="btn ghost wide" data-inst>Auf den Startbildschirm</button>' : ''}`;
   },
   bind: root => {
+    root.querySelector('[data-rg]').addEventListener('click', tourStarten);
+    const ue = root.querySelector('[data-ueb]'); if (ue) ue.addEventListener('click', uebungStarten);
     root.querySelectorAll('[data-sch]').forEach(b => b.addEventListener('click', () => { S.schrift = +b.dataset.sch; render(); }));
     root.querySelectorAll('[data-ka]').forEach(b => b.addEventListener('click', () => { S.kachel = +b.dataset.ka; render(); }));
     const i = root.querySelector('[data-inst]'); if (i) i.addEventListener('click', () => go('install'));

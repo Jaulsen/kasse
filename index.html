@@ -542,12 +542,82 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
   #app.dock.kachel-3 .grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
   #app.dock .sheet { max-width: 640px; margin: 0 auto; border-radius: 20px 20px 0 0; }
   #app.dock .scrim { justify-content: center; }
+
+  /* 2.6 */
+  .vorz { white-space: pre-line; overflow-wrap: anywhere; }
+  .card .vorz { display: block; }
+  .vorschau { border: 2px solid var(--green); border-radius: 16px; padding: 22px 10px 10px; position: relative; background: var(--bg); box-shadow: 0 2px 10px rgba(0,0,0,.08); margin-top: 8px; }
+  .vorschau .vtitel { position: absolute; top: -10px; left: 12px; background: var(--green); color: #fff; font-weight: 800; font-size: 12px; padding: 2px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: .05em; }
+  .pknoepfe { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .pknoepfe .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 12px 8px; }
+  .pknoepfe .btn svg { width: 18px; height: 18px; flex: none; }
+  .codebox { display: flex; flex-direction: column; align-items: center; gap: 2px; border: 2px solid var(--green); background: var(--green-soft); border-radius: 14px; padding: 10px; }
+  .codebox small { color: var(--green-dark); font-weight: 800; }
+  .codebox b { font-family: var(--font-display); font-size: 40px; letter-spacing: .08em; color: var(--green-dark); }
+  .formrow > .btn { align-self: end; display: inline-flex; align-items: center; gap: 6px; }
+  .formrow > .btn svg { width: 18px; height: 18px; }
+  .leute { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--surface); }
+  .loglist { display: flex; flex-direction: column; }
+  .logz { display: flex; flex-direction: column; gap: 1px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .logz small { font-size: 12px; }
+  .rbtn { flex: none; width: 40px; height: 40px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; color: var(--blue); padding: 0; }
+  .rbtn svg { width: 22px; height: 22px; }
+  table.rechte { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.rechte th { font-size: 11px; font-weight: 800; color: var(--muted); padding: 4px 2px; text-align: center; }
+  table.rechte td { padding: 6px 2px; border-bottom: 1px solid var(--line); text-align: center; color: var(--green); font-weight: 800; }
+  table.rechte td:first-child { text-align: left; color: var(--ink); font-weight: 600; }
+  table.rechte tr:nth-child(4n+1) td:first-child, table.rechte tr:nth-child(4n+1) td { border-top: 0; }
+  /* Kasse: Suche, Service */
+  .suchzeile { display: flex; gap: 8px; align-items: center; }
+  .suchzeile .search { flex: 1; min-width: 0; }
+  .unscharf { border: 0; background: none; color: var(--muted); font-size: 20px; font-weight: 800; width: 34px; height: 34px; border-radius: 8px; padding: 0; flex: none; }
+  .unscharf[aria-pressed="true"] { background: var(--blue-soft); color: var(--blue); }
+  .servicebtn { flex: none; display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 999px; padding: 7px 10px; font-size: 13px; font-weight: 800; }
+  .servicebtn svg { width: 16px; height: 16px; }
+  .servicebtn[aria-pressed="true"] { background: #C8463D; color: #fff; border-color: transparent; }
+  .gridwrap.service { background: repeating-linear-gradient(45deg, #FBE9E7 0 14px, #F6D5D1 14px 28px); }
+  .gridwrap.service .tile.out { opacity: .55; filter: grayscale(.7); }
+  .gridwrap.service .tile .tag { background: #C8463D; }
+  .neuprod { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 0 0 10px; border: 2px dashed #C8463D; background: rgba(255,255,255,.85); color: #A0342C; border-radius: 14px; padding: 14px; font-size: 16px; font-weight: 800; }
+  .neuprod svg { width: 20px; height: 20px; }
+  .banner.korr { background: var(--blue-soft); color: var(--blue); display: flex; align-items: center; gap: 8px; }
+  .banner.korr span, .banner.uebung span { flex: 1; }
+  .banner.korr button, .banner.uebung button { border: 0; background: rgba(255,255,255,.75); color: inherit; font-weight: 800; border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+  .banner.uebung { background: #F28C28; color: #fff; display: flex; align-items: center; gap: 6px; font-weight: 800; }
+  .banner.uebung button { background: rgba(255,255,255,.25); }
+  /* Rückgeld-Fenster */
+  .rgpop { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(23,35,26,.38); animation: fade .12s ease-out; }
+  .rgkarte { min-width: 240px; background: var(--green-soft); border: 3px solid var(--green); color: var(--green-dark); border-radius: 24px; padding: 18px 28px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.25); display: flex; flex-direction: column; gap: 2px; }
+  .rgkarte small { font-weight: 800; font-size: 17px; }
+  .rgkarte b { font-family: var(--font-display); font-size: 60px; font-weight: 600; line-height: 1.05; }
+  .rgkarte span { font-size: 15px; font-weight: 700; opacity: .8; }
+  .rgkarte.aus, .rgkarte.diff { background: var(--blue-soft); border-color: var(--blue); color: var(--blue); }
+  /* Rechnung beim Bezahlen */
+  .rechnung { display: grid; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 18px minmax(0, 1fr); align-items: end; gap: 4px; height: 76px; border-radius: 14px; background: var(--bg); padding: 8px 10px; }
+  .rechnung:not(.voll) { grid-template-columns: 1fr; align-items: center; justify-items: center; }
+  .rz { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .rz small { font-size: 12px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+  .rz b { font-family: var(--font-display); font-size: 24px; font-weight: 600; white-space: nowrap; }
+  .rz.mitte b { font-size: 34px; }
+  .rechnung .op { font-size: 22px; font-weight: 800; color: var(--muted); text-align: center; padding-bottom: 3px; }
+  .rz.zurueck { color: var(--green-dark); } .rz.zurueck small { color: var(--green-dark); }
+  .rz.fehlt { color: var(--danger); } .rz.fehlt small { color: var(--danger); }
+  .givenrow input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 17px; background: var(--surface); color: var(--ink); }
+  .givenrow .mini-btn { margin: 0; }
+  /* Rundgang */
+  .tour { position: absolute; inset: 0; z-index: 80; }
+  .tourloch { position: absolute; border-radius: 14px; box-shadow: 0 0 0 4000px rgba(10,20,12,.62); border: 3px solid #FFD54A; pointer-events: none; transition: all .2s ease; }
+  .tourloch.voll { left: 50%; top: 50%; width: 0; height: 0; border: 0; }
+  .tourbox { position: absolute; left: 14px; right: 14px; background: var(--surface); border-radius: 16px; padding: 14px 16px; box-shadow: 0 8px 30px rgba(0,0,0,.3); display: flex; flex-direction: column; gap: 6px; max-width: 460px; margin: 0 auto; }
+  .tourbox p { margin: 0; font-size: 16.5px; line-height: 1.35; }
+  .tourbox small { color: var(--muted); font-weight: 800; }
+  .tourbox b { font-family: var(--font-display); font-size: 22px; }
 </style>
 </head>
 <body>
 <div id="app" aria-live="polite"><p class="empty">Kasse wird geladen …</p></div>
 <script src="config.js"></script>
-<script>if (!(window.KASSE_CONFIG && window.KASSE_CONFIG.API_URL)) document.write('<script src="demo-daten.js"><\/script><script src="demo-server.js"><\/script><script src="demo-gs.js"><\/script>');</script>
+<script>if (!(window.KASSE_CONFIG && window.KASSE_CONFIG.API_URL) || /[?&]uebung=1/.test(location.search)) document.write('<script src="demo-daten.js"><\/script><script src="demo-server.js"><\/script><script src="demo-gs.js"><\/script>');</script>
 <script src="app.js"></script>
 <script src="seiten.js"></script>
 <script src="verwaltung.js"></script>
