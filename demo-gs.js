@@ -9,7 +9,7 @@ window.__GS = (function () {
  * Version 1.x wird beim ersten Aufruf automatisch umgestellt (Märkte › Stände).
  */
 
-const VERSION = '2.6';
+const VERSION = '2.7';
 const TZ = 'Europe/Berlin';
 const MAX_DATEI_BYTES = 350000;
 const PUFFER_MIN = 30;
@@ -41,7 +41,7 @@ const TABS = {
   'Protokoll': ['kategorie', 'zeit', 'benutzer_id', 'text']
 };
 /* Tabellen, deren Änderung die Stammdaten der Geräte nicht berührt (kein neuer Datenstand) */
-const OHNE_DATENSTAND = ['Positionen', 'Verkäufe', 'Einladungen', 'Lasttest', 'Protokoll'];
+const OHNE_DATENSTAND = ['Positionen', 'Verkäufe', 'Einladungen', 'Lasttest', 'Protokoll', 'Nachrichten'];
 
 /* ===================================================================
    Einstieg
@@ -73,23 +73,41 @@ const AKTIONEN = {
   verantwortung: verantwortung_, checkpunkt_speichern: checkpunktSpeichern_, checkpunkt_loeschen: checkpunktLoeschen_, checkpunkt_haken: checkpunktHaken_,
   vorlage_speichern: vorlageSpeichern_, vorlage_loeschen: vorlageLoeschen_, vorlage_anwenden: vorlageAnwenden_, markt_kopieren: marktKopieren_,
   gruppe_speichern: gruppeSpeichern_, gruppe_loeschen: gruppeLoeschen_, gruppe_waehlen: gruppeWaehlen_, plan_kopieren: planKopieren_,
-  rm_bild: rmBild_, lasttest: lasttest_, saison_abschliessen: saisonAbschliessen_,
+  rm_bild: rmBild_, lasttest: lasttest_, saison_abschliessen: saisonAbschliessen_, benutzer_umbenennen: benutzerUmbenennen_,
   empfaenger: empfaenger_, nachricht_bild: nachrichtBild_, protokoll: protokollListe_
 };
 
+/* Direkte Aufrufe, die nach einer Zeitüberschreitung nicht doppelt ausgeführt werden dürfen */
+const EINMALIG = ['code_erzeugen', 'einladung_erstellen', 'nachricht_senden', 'produkt_speichern', 'stand_speichern', 'markt_speichern', 'benutzer_umbenennen'];
 function verarbeite_(p) {
-  geschrieben_ = false;
+  geschrieben_ = false; persoenlich_ = {}; vorab_ = {};
   Object.keys(cache_).forEach(function (k) { delete cache_[k]; });
   try {
     migrieren_();
     const f = AKTIONEN[p.aktion];
     if (!f) return { ok: false, fehler: 'Unbekannte Aktion: ' + p.aktion };
-    const r = f(p);
-    if (geschrieben_) neuerDatenstand_();
-    if (r && r.ok && (p.aktion === 'sync' || p.aktion === 'stammdaten')) { r.v = r.v || datenstand_(); r.zeit = new Date().toISOString(); }
+    let r;
+    if (txt_(p.anfrage_id) && EINMALIG.indexOf(p.aktion) >= 0) {
+      const k = 'a_' + txt_(p.anfrage_id).slice(0, 40), c = CacheService.getScriptCache();
+      r = sperre_(function () {
+        const alt = c.get(k);
+        if (alt) return JSON.parse(alt);
+        const x = f(p);
+        if (x && x.ok) { try { c.put(k, JSON.stringify(x), 3600); } catch (err) { } }
+        return x;
+      });
+    } else r = f(p);
+    datenstandAbschliessen_();
+    if (r && r.ok && (p.aktion === 'sync' || p.aktion === 'stammdaten')) { r.v = r.v || datenstand_(p.benutzer_id); r.zeit = new Date().toISOString(); }
+    // Abgleich: neue Daten gleich mitschicken, spart eine zweite Anfrage
+    if (r && r.ok && p.aktion === 'sync' && p.mit_stamm) {
+      Object.keys(cache_).forEach(function (k) { delete cache_[k]; });
+      try { r.stamm = stammdaten_(Object.assign({}, p, { v: txt_(p.stamm_v), hash: txt_(p.stamm_hash) })); if (r.stamm && r.stamm.ok) { r.stamm.v = r.stamm.v || datenstand_(p.benutzer_id); r.stamm.zeit = new Date().toISOString(); } }
+      catch (err) { r.stamm = null; }
+    }
     return r;
   } catch (err) {
-    if (geschrieben_) neuerDatenstand_();
+    datenstandAbschliessen_();
     console.error(err && err.stack || err);
     return { ok: false, fehler: String((err && err.message) || err) };
   }
@@ -97,12 +115,45 @@ function verarbeite_(p) {
 
 /* Datenstand: ändert sich bei jeder Änderung, die die Geräte sehen müssen.
    Geräte mit aktuellem Datenstand bekommen nur eine kurze Antwort. */
-let geschrieben_ = false;
-function datenstand_() {
+let geschrieben_ = false, persoenlich_ = {}, vorab_ = {};
+/* Dateien, die in dieser Anfrage vorab gespeichert wurden (nur diese Namen werden übernommen) */
+function vorab_merken_(n) { vorab_[n] = true; return n; }
+function vorabName_(n) { return n && vorab_[txt_(n)] ? txt_(n) : ''; }
+function datenstandGlobal_() {
   const c = CacheService.getScriptCache();
   let v = c.get('datenstand');
   if (!v) { v = Utilities.getUuid().slice(0, 8); c.put('datenstand', v, 21600); }
   return v + '|' + heute_();
+}
+/* Datenstand eines Geräts: gemeinsamer Teil + persönlicher Teil (Nachrichten) */
+function datenstand_(benutzerId) {
+  const g = datenstandGlobal_();
+  if (!txt_(benutzerId)) return g;
+  return g + '|' + (CacheService.getScriptCache().get('pstand_' + txt_(benutzerId)) || '0');
+}
+function persoenlichNeu_(id) { if (txt_(id)) persoenlich_[txt_(id)] = true; }
+function datenstandAbschliessen_() {
+  if (geschrieben_) neuerDatenstand_();
+  const ids = Object.keys(persoenlich_); persoenlich_ = {};
+  if (!ids.length) return;
+  try { SpreadsheetApp.flush(); } catch (e) { }
+  const c = CacheService.getScriptCache();
+  ids.forEach(function (id) { c.put('pstand_' + id, Utilities.getUuid().slice(0, 6), 21600); });
+}
+/* Große Werte im CacheService in Teilen ablegen (je Wert höchstens 100 KB) */
+function cacheHolen_(k) {
+  const c = CacheService.getScriptCache(), n = Number(c.get(k + '_n'));
+  if (!n) return null;
+  let s = '';
+  for (let i = 0; i < n; i++) { const x = c.get(k + '_' + i); if (x === null || x === undefined) return null; s += x; }
+  try { return JSON.parse(s); } catch (e) { return null; }
+}
+function cacheLegen_(k, obj, sek) {
+  const s = JSON.stringify(obj), teile = [];
+  for (let i = 0; i < s.length; i += 45000) teile.push(s.slice(i, i + 45000));
+  if (teile.length > 20) return;
+  const c = CacheService.getScriptCache();
+  try { teile.forEach(function (t, i) { c.put(k + '_' + i, t, sek); }); c.put(k + '_n', String(teile.length), sek); } catch (e) { }
 }
 function neuerDatenstand_() {
   try { SpreadsheetApp.flush(); } catch (e) { }
@@ -509,16 +560,36 @@ function registrieren_(p) {
   });
 }
 function platzhalterVerknuepfen_(id, name) {
-  const s = tab_('Schichten'), n = name.toLowerCase();
+  const s = tab_('Schichten'), n = name.toLowerCase(), anz = { schichten: 0, produkte: 0, punkte: 0 };
   s.zeilen.forEach(function (z) {
     if (!txt_(z.benutzer_id) && name_(z.platzhalter).toLowerCase() === n && txt_(z.status) === 'geplant' && !ueberschneidung_(id, tag_(z.datum), uhr_(z.von), uhr_(z.bis), z.schicht_id)) {
-      setzen_(s, z, 'benutzer_id', id); setzen_(s, z, 'status', 'verknuepfung');
+      setzen_(s, z, 'benutzer_id', id); setzen_(s, z, 'status', 'verknuepfung'); anz.schichten++;
     }
   });
   const pr = tab_('Produkte');
-  pr.zeilen.forEach(function (z) { if (!txt_(z.verantwortlich_id) && name_(z.verantwortlich_platzhalter).toLowerCase() === n) { setzen_(pr, z, 'verantwortlich_id', id); setzen_(pr, z, 'verantwortlich_platzhalter', ''); } });
+  pr.zeilen.forEach(function (z) { if (!txt_(z.verantwortlich_id) && name_(z.verantwortlich_platzhalter).toLowerCase() === n) { setzen_(pr, z, 'verantwortlich_id', id); setzen_(pr, z, 'verantwortlich_platzhalter', ''); anz.produkte++; } });
   const ck = tab_('Checklisten');
-  ck.zeilen.forEach(function (z) { if (!txt_(z.zustaendig_id) && name_(z.platzhalter).toLowerCase() === n) { setzen_(ck, z, 'zustaendig_id', id); setzen_(ck, z, 'platzhalter', ''); } });
+  ck.zeilen.forEach(function (z) { if (!txt_(z.zustaendig_id) && name_(z.platzhalter).toLowerCase() === n) { setzen_(ck, z, 'zustaendig_id', id); setzen_(ck, z, 'platzhalter', ''); anz.punkte++; } });
+  return anz;
+}
+/* Admin: Namen einer Person ändern; Platzhalter mit dem neuen Namen werden ihr zugeordnet */
+function benutzerUmbenennen_(p) {
+  const admin = auth_(p, 4);
+  const name = name_(p.name);
+  if (name.length < 2) throw new Error('Name zu kurz.');
+  return sperre_(function () {
+    const t = tab_('Benutzer');
+    const z = t.zeilen.filter(function (x) { return txt_(x.benutzer_id) === txt_(p.ziel_id); })[0];
+    if (!z) throw new Error('Person nicht gefunden.');
+    const alt = name_(z.name);
+    if (alt === name) return { ok: true, name: name, zugeordnet: { schichten: 0, produkte: 0, punkte: 0 } };
+    if (t.zeilen.some(function (x) { return x !== z && name_(x.name).toLowerCase() === name.toLowerCase(); })) throw new Error('Name gibt es schon.');
+    setzen_(t, z, 'name', name);
+    protokoll_('Personen', admin, alt + ' → ' + name);
+    if (txt_(z.benutzer_id) !== txt_(admin.benutzer_id)) nachricht_(txt_(z.benutzer_id), 'Neuer Name: ' + name, 'Bei der nächsten Anmeldung diesen Namen eingeben. Die PIN bleibt gleich.', admin);
+    const anz = platzhalterVerknuepfen_(txt_(z.benutzer_id), name);
+    return { ok: true, name: name, zugeordnet: anz };
+  });
 }
 
 function anmelden_(p) {
@@ -608,7 +679,7 @@ function verantwortungFuer_() {
 }
 
 function stammdaten_(p) {
-  const v = datenstand_();   // zuerst lesen: was danach geändert wird, bekommt einen neuen Datenstand
+  const v = datenstand_(p.benutzer_id);   // zuerst lesen: was danach geändert wird, bekommt einen neuen Datenstand
   let b;
   try { b = auth_(p); }
   catch (err) {
@@ -619,6 +690,21 @@ function stammdaten_(p) {
   }
   // Nichts geändert: kurze Antwort, ohne die übrigen Tabellen zu lesen
   if (p.v && p.v === v) return { ok: true, version: VERSION, heute: heute_(), v: v, gleich: true, benutzer: benutzerInfo_(b) };
+  // Gemeinsamer Teil (Produkte, Märkte, Stände, Preise …): einmal je Datenstand und Stamm bauen
+  const gkey = 'stamm_' + datenstandGlobal_().replace(/\W/g, '') + '_' + (rang_(b) >= 4 ? 'alle' : (txt_(b.gruppe_id) || 'ohne'));
+  let g = cacheHolen_(gkey);
+  if (!g) { g = gemeinsam_(b); cacheLegen_(gkey, g, 3600); }
+  const daten = g.daten, hash = g.hash, staende = daten.staende;
+  const kopf = { ok: true, version: VERSION, heute: heute_(), v: v, hash: hash, benutzer: benutzerInfo_(b), zugang: zugangFuer_(b, p.geraet_id), rechte: rechteFuer_(b),
+    hinweise: hinweisListe_(b), nachrichten: nachrichtenFuer_(b), schichten: schichtenFuer_(b, staende), checklisten: checklistenFuer_(b),
+    verantwortung: verantwortungFuer_(), vorlagen: rang_(b) >= 2 ? vorlagenFuer_(b) : [] };
+  if (kopf.rechte.staende.length || rang_(b) >= 3) kopf.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && personSichtbar_(b, z); })
+    .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), gruppe_id: txt_(z.gruppe_id) }; }).sort(function (a, c) { return a.name.localeCompare(c.name); });
+  if (p.hash && p.hash === hash) return Object.assign(kopf, { unveraendert: true });
+  return Object.assign(kopf, daten);
+}
+
+function gemeinsam_(b) {
   const e = einstellungen_();
   const alleNamen = namen_();
   const bilder = ordnerListe_(e.bilder_ordner_id), infos = ordnerListe_(e.info_ordner_id);
@@ -662,13 +748,7 @@ function stammdaten_(p) {
   };
   const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(daten), Utilities.Charset.UTF_8)
     .map(function (x) { return ('0' + (x & 255).toString(16)).slice(-2); }).join('');
-  const kopf = { ok: true, version: VERSION, heute: heute_(), v: v, hash: hash, benutzer: benutzerInfo_(b), zugang: zugangFuer_(b, p.geraet_id), rechte: rechteFuer_(b),
-    hinweise: hinweisListe_(b), nachrichten: nachrichtenFuer_(b), schichten: schichtenFuer_(b, staende), checklisten: checklistenFuer_(b),
-    verantwortung: verantwortungFuer_(), vorlagen: rang_(b) >= 2 ? vorlagenFuer_(b) : [] };
-  if (kopf.rechte.staende.length || rang_(b) >= 3) kopf.personen = tab_('Benutzer').zeilen.filter(function (z) { return status_(z) === 'aktiv' && !ja_(z.entfernt) && personSichtbar_(b, z); })
-    .map(function (z) { return { benutzer_id: txt_(z.benutzer_id), name: name_(z.name), rolle: rolle_(z), gruppe_id: txt_(z.gruppe_id) }; }).sort(function (a, c) { return a.name.localeCompare(c.name); });
-  if (p.hash && p.hash === hash) return Object.assign(kopf, { unveraendert: true });
-  return Object.assign(kopf, daten);
+  return { daten: daten, hash: hash };
 }
 
 function schichtenFuer_(b, staende) {
@@ -701,10 +781,28 @@ function dateien_(p) {
    Abgleich (Warteschlange eines Geräts)
    =================================================================== */
 function sync_(p) {
+  const c = CacheService.getScriptCache();
+  // schon übertragene Einträge (Antwort ging verloren): nicht noch einmal ausführen
+  const schon = {};
+  (p.eintraege || []).forEach(function (en) { if (en && en.typ !== 'Bon' && en.typ !== 'Rueckmeldung' && c.get('q_' + txt_(en.id))) schon[en.id] = true; });
+  // Fotos vorab in Drive speichern, damit die Sperre nicht auf Drive wartet
+  (p.eintraege || []).forEach(function (en) {
+    if (!en || schon[en.id]) return;
+    const d = en.data || {};
+    try {
+      if (en.typ === 'Rueckmeldung' && d.bild && typeof d.bild === 'string' && d.bild.length < 1500000 && !tab_('Rückmeldungen').zeilen.some(function (z) { return txt_(z.rm_id) === txt_(d.rm_id); })) {
+        d.bild_datei = vorab_merken_(dateiSpeichern_(ordnerSicherstellen_('rueckmeldung_ordner_id', 'Kassen-App Rückmeldungen'), 'rm_' + txt_(d.rm_id).slice(0, 8) + '_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '.jpg', d.bild, 'image/jpeg', false));
+        delete d.bild;
+      }
+      if (en.typ === 'Aktion' && d.aktion === 'nachricht_senden') nachrichtFoto_(d);
+      if (en.typ === 'Aktion' && d.aktion === 'produkt_speichern') produktDateien_(d);
+    } catch (err) { console.error('Foto vorab', err); }
+  });
   return sperre_(function () {
     const erledigt = [], fehler = [];
     const bons = { vk: null, pos: null, ids: null, zeilen: [], positionen: [] };
     (p.eintraege || []).forEach(function (en) {
+      if (schon[en.id]) { erledigt.push(en.id); return; }
       try {
         const d = en.data || {}, bid = txt_(en.benutzer_id || p.benutzer_id);
         if (en.typ === 'Bon') bonSpeichern_(d, p, en, bons);
@@ -719,8 +817,12 @@ function sync_(p) {
         }
         else throw new Error('Unbekannter Eintrag: ' + en.typ);
         erledigt.push(en.id);
+        if (en.typ !== 'Bon' && en.typ !== 'Rueckmeldung') { try { c.put('q_' + txt_(en.id), '1', 21600); } catch (e2) { } }
       } catch (err) {
-        fehler.push({ id: en.id, typ: en.typ, fehler: String((err && err.message) || err) });
+        const f = String((err && err.message) || err);
+        fehler.push({ id: en.id, typ: en.typ, fehler: f });
+        // Glocke: abgelehnte Änderung aus der Warteschlange
+        try { nachricht_(txt_(en.benutzer_id || p.benutzer_id), 'Nicht gespeichert: ' + eintragName_(en), f); } catch (e3) { }
       }
     });
     bonsSchreiben_(bons);
@@ -728,8 +830,18 @@ function sync_(p) {
   });
 }
 
+function eintragName_(en) {
+  const d = en.data || {};
+  if (en.typ === 'Bon') return 'Bon';
+  if (en.typ === 'Storno') return 'Storno';
+  if (en.typ === 'Verfuegbarkeit') return 'Verfügbarkeit';
+  if (en.typ === 'Rueckmeldung') return 'Rückmeldung';
+  const n = { produkt_speichern: 'Produkt ' + txt_((d.produkt || {}).name), stand_speichern: 'Stand ' + txt_((d.stand || {}).name), nachricht_senden: 'Nachricht „' + txt_(d.titel) + '“',
+    schicht_speichern: 'Schicht', schicht_loeschen: 'Schicht löschen', preis_speichern: 'Preis', hinweis_aktion: 'Bestätigung', benutzer_aendern: 'Person', checkpunkt_speichern: 'Checkliste', checkpunkt_haken: 'Checkliste', verantwortung: 'Verantwortung' };
+  return n[d.aktion] || txt_(d.aktion);
+}
 /* Aktionen, die die App ohne Warten in die Warteschlange stellt */
-const WARTESCHLANGE = ['hinweis_aktion', 'schicht_speichern', 'schicht_loeschen', 'rueckmeldung_status', 'benutzer_aendern', 'preis_speichern', 'zustaendigkeit', 'nachricht_gelesen', 'checkpunkt_speichern', 'checkpunkt_loeschen', 'checkpunkt_haken', 'verantwortung'];
+const WARTESCHLANGE = ['hinweis_aktion', 'schicht_speichern', 'schicht_loeschen', 'rueckmeldung_status', 'benutzer_aendern', 'preis_speichern', 'zustaendigkeit', 'nachricht_gelesen', 'checkpunkt_speichern', 'checkpunkt_loeschen', 'checkpunkt_haken', 'verantwortung', 'produkt_speichern', 'stand_speichern', 'nachricht_senden'];
 function aktionAusfuehren_(d, benutzerId, geraetId) {
   if (WARTESCHLANGE.indexOf(d.aktion) < 0) throw new Error('Aktion nicht erlaubt: ' + d.aktion);
   const r = AKTIONEN[d.aktion](Object.assign({}, d, { benutzer_id: benutzerId, geraet_id: geraetId }));
@@ -833,8 +945,8 @@ function verfuegbarkeitSetzen_(d, benutzerId) {
 function rueckmeldungSpeichern_(d) {
   const t = tab_('Rückmeldungen');
   if (t.zeilen.some(function (z) { return txt_(z.rm_id) === d.rm_id; })) return;
-  let bild = '';
-  if (d.bild && typeof d.bild === 'string' && d.bild.length < 1500000) {
+  let bild = vorabName_(d.bild_datei);
+  if (!bild && d.bild && typeof d.bild === 'string' && d.bild.length < 1500000) {
     try {
       const ordner = ordnerSicherstellen_('rueckmeldung_ordner_id', 'Kassen-App Rückmeldungen');
       bild = dateiSpeichern_(ordner, 'rm_' + txt_(d.rm_id).slice(0, 8) + '_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '.jpg', d.bild, 'image/jpeg', false);
@@ -1123,7 +1235,8 @@ function hinweisAktion_(p) {
     if (p.typ === 'registrierung') {
       const t = tab_('Benutzer');
       const z = t.zeilen.filter(function (x) { return txt_(x.benutzer_id) === txt_(p.id); })[0];
-      if (!z || status_(z) !== 'wartet') throw new Error('Nicht gefunden.');
+      if (!z) throw new Error('Nicht gefunden.');
+      if (status_(z) !== 'wartet') return { ok: true, erledigt: true };   // schon von jemand anderem erledigt
       if (!((rang_(b) >= 3 && personSichtbar_(b, z)) || txt_(z.eingeladen_von) === txt_(b.benutzer_id))) throw new Error('Keine Berechtigung.');
       setzen_(t, z, 'aktiv', ja ? 'JA' : 'NEIN');
     } else if (p.typ === 'bon') {
@@ -1139,14 +1252,16 @@ function hinweisAktion_(p) {
       standPruefen_(b, parts[0]);
       const t = tab_('Verfügbarkeit');
       const z = t.zeilen.filter(function (x) { return txt_(x.stand_id) === parts[0] && txt_(x.produkt_id) === parts[1]; })[0];
-      if (!z) throw new Error('Nicht gefunden.');
+      if (!z || ja_(z.geprueft)) return { ok: true, erledigt: true };
       setzen_(t, z, 'geprueft', 'JA');
       if (!ja) { setzen_(t, z, 'status', 'verfuegbar'); setzen_(t, z, 'geaendert_von', txt_(b.benutzer_id)); setzen_(t, z, 'geaendert_am', new Date()); }
     } else if (p.typ === 'schicht' || p.typ === 'verknuepfung') {
       const t = tab_('Schichten');
       const z = t.zeilen.filter(function (x) { return txt_(x.schicht_id) === txt_(p.id); })[0];
-      if (!z) throw new Error('Nicht gefunden.');
+      if (!z) return { ok: true, erledigt: true };
       standPruefen_(b, z.stand_id);
+      if (p.typ === 'schicht' && txt_(z.status) !== 'vorgeschlagen') return { ok: true, erledigt: true };
+      if (p.typ === 'verknuepfung' && txt_(z.status) !== 'verknuepfung') return { ok: true, erledigt: true };
       const s = stand_(z.stand_id), info = kurzTag_(z.datum) + ' ' + uhr_(z.von) + '–' + uhr_(z.bis) + ' · ' + txt_(z.aufgabe) + (s ? ' · ' + txt_(s.name) : '');
       if (ja) {
         ueberschneidungPruefen_(z.benutzer_id, tag_(z.datum), uhr_(z.von), uhr_(z.bis), [z.schicht_id, z.ersetzt]);
@@ -1168,7 +1283,8 @@ function hinweisAktion_(p) {
     } else if (p.typ === 'produktaenderung') {
       const t = tab_('Produkte');
       const z = t.zeilen.filter(function (x) { return txt_(x.produkt_id) === txt_(p.id); })[0];
-      if (!z || !txt_(z.offen_am)) throw new Error('Nicht gefunden.');
+      if (!z) throw new Error('Nicht gefunden.');
+      if (!txt_(z.offen_am)) return { ok: true, erledigt: true };
       if (!(rang_(b) >= 4 || txt_(z.verantwortlich_id) === txt_(b.benutzer_id))) throw new Error('Keine Berechtigung.');
       if (ja) {
         if (txt_(z.offen_bild)) setzen_(t, z, 'bild', txt_(z.offen_bild));
@@ -1198,6 +1314,7 @@ function hinweisAktion_(p) {
    =================================================================== */
 function nachricht_(an, titel, text, von, bild) {
   if (!txt_(an)) return;
+  persoenlichNeu_(an);
   anhaengen_(tab_('Nachrichten'), [{ nachricht_id: Utilities.getUuid().slice(0, 12), an: txt_(an), titel: txt_(titel), text: txt_(text), von: von ? txt_(von.benutzer_id) : '', am: new Date(), bild: bild || '' }]);
 }
 /* Gelesene Nachrichten: 7 Tage in der App, nach 30 Tagen aus dem Sheet */
@@ -1224,6 +1341,7 @@ function nachrichtGelesen_(p) {
   const b = auth_(p);
   return sperre_(function () {
     const t = tab_('Nachrichten');
+    persoenlichNeu_(b.benutzer_id);
     t.zeilen.forEach(function (z) { if (txt_(z.an) === txt_(b.benutzer_id) && !txt_(z.gelesen_am) && (p.id === 'alle' || txt_(z.nachricht_id) === txt_(p.id))) setzen_(t, z, 'gelesen_am', new Date()); });
     nachrichtenAufraeumen_();
     return { ok: true };
@@ -1261,13 +1379,18 @@ function nachrichtSenden_(p) {
   else if (ziel.art === 'personen') throw new Error('Personen auswählen.');
   ids = ids.filter(function (id) { return id !== txt_(b.benutzer_id); });
   if (!ids.length) throw new Error('Niemand ausgewählt.');
-  let bild = '';
-  if (p.bild && typeof p.bild === 'string') bild = dateiSpeichern_(ordnerSicherstellen_('nachricht_ordner_id', 'Kassen-App Nachrichten'), 'nachricht_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '.jpg', p.bild, 'image/jpeg', false);
+  nachrichtFoto_(p);
+  const bild = vorabName_(p.bild_datei);
   return sperre_(function () {
     const jetzt = new Date();
+    ids.forEach(persoenlichNeu_);
     anhaengen_(tab_('Nachrichten'), ids.map(function (id) { return { nachricht_id: Utilities.getUuid().slice(0, 12), an: id, titel: titel, text: text, von: txt_(b.benutzer_id), am: jetzt, bild: bild }; }));
     return { ok: true, anzahl: ids.length };
   });
+}
+/* Foto einer Nachricht vorab in Drive (außerhalb der Sperre) */
+function nachrichtFoto_(d) {
+  if (d.bild && typeof d.bild === 'string') { d.bild_datei = vorab_merken_(dateiSpeichern_(ordnerSicherstellen_('nachricht_ordner_id', 'Kassen-App Nachrichten'), 'nachricht_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '_' + Utilities.getUuid().slice(0, 4) + '.jpg', d.bild, 'image/jpeg', false)); delete d.bild; }
 }
 /* Leute zur Auswahl beim Schreiben */
 function empfaenger_(p) {
@@ -1435,31 +1558,39 @@ function produkteAdmin_(p) {
   }) };
 }
 
+/* Bild und Zusatzdateien eines Produkts vorab in Drive (außerhalb der Sperre) */
+function produktDateien_(p) {
+  const d = p.produkt || {}, basisId = (txt_(d.produkt_id) || 'neu').toLowerCase(), stempel = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss');
+  if (p.bild && p.bild.data) p.bild = { datei: vorab_merken_(dateiSpeichern_(ordnerSicherstellen_('bilder_ordner_id', 'Kassen-App Produktbilder'), basisId + '_' + stempel + '.jpg', p.bild.data, 'image/jpeg', false)) };
+  if (Array.isArray(p.zusatzdateien) && p.zusatzdateien.some(function (f) { return f && f.data; })) {
+    p.zusatz_namen = [].concat(p.zusatzdateien.filter(function (f) { return f && f.data; }).map(function (f, i) {
+      const pdf = f.mime === 'application/pdf';
+      const basis = txt_(f.name).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[äöüß]/g, function (c) { return { 'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss' }[c]; }).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+      return vorab_merken_(dateiSpeichern_(ordnerSicherstellen_('info_ordner_id', 'Kassen-App Produktinfos'), basisId + '_' + (basis || 'info') + '_' + stempel + '_' + (i + 1) + (pdf ? '.pdf' : '.jpg'), f.data, pdf ? 'application/pdf' : 'image/jpeg', true));
+    }));
+    p.zusatzdateien = [];
+  }
+}
 function produktSpeichern_(p) {
   const b = auth_(p);
   const marktleitung = rang_(b) >= 3;
   const d = p.produkt || {};
+  produktDateien_(p);
   return sperre_(function () {
     const t = tab_('Produkte');
-    let z = null;
+    let z = null, neuId = '';
     if (txt_(d.produkt_id)) {
       z = t.zeilen.filter(function (x) { return txt_(x.produkt_id) === txt_(d.produkt_id); })[0];
-      if (!z) throw new Error('Produkt nicht gefunden.');
+      // neues Produkt mit ID vom Gerät (Warteschlange): beim ersten Mal anlegen, bei Wiederholung aktualisieren
+      if (!z && p.neu && /^P[A-Z0-9]{4,16}$/.test(txt_(d.produkt_id))) neuId = txt_(d.produkt_id);
+      else if (!z) throw new Error('Produkt nicht gefunden.');
     }
     if (!marktleitung && !z) throw new Error('Neue Produkte legt die Marktleitung an.');
     const istVerantwortlich = z && txt_(z.verantwortlich_id) === txt_(b.benutzer_id);
     if (!marktleitung && !istVerantwortlich && rang_(b) < 2) throw new Error('Keine Berechtigung.');
-    const id = z ? txt_(z.produkt_id) : neueId_(t, 'produkt_id', 'P');
-    const stempel = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss');
-    const info = (Array.isArray(d.info_dateien) ? d.info_dateien : []).map(txt_).filter(String);
-    let bild = '';
-    if (p.bild && p.bild.data) bild = dateiSpeichern_(ordnerSicherstellen_('bilder_ordner_id', 'Kassen-App Produktbilder'), id.toLowerCase() + '_' + stempel + '.jpg', p.bild.data, 'image/jpeg', false);
-    (p.zusatzdateien || []).forEach(function (f, i) {
-      if (!f || !f.data) return;
-      const pdf = f.mime === 'application/pdf';
-      const basis = txt_(f.name).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[äöüß]/g, function (c) { return { 'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss' }[c]; }).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-      info.push(dateiSpeichern_(ordnerSicherstellen_('info_ordner_id', 'Kassen-App Produktinfos'), id.toLowerCase() + '_' + (basis || 'info') + '_' + stempel + '_' + (i + 1) + (pdf ? '.pdf' : '.jpg'), f.data, pdf ? 'application/pdf' : 'image/jpeg', true));
-    });
+    const id = z ? txt_(z.produkt_id) : neuId || neueId_(t, 'produkt_id', 'P');
+    const info = (Array.isArray(d.info_dateien) ? d.info_dateien : []).map(txt_).filter(String).concat((p.zusatz_namen || []).map(vorabName_).filter(String));
+    const bild = p.bild && p.bild.datei ? vorabName_(p.bild.datei) : '';
     const inhalt = { beschreibung: txt_(d.beschreibung), info_dateien: info.join(';') };
     if (bild) inhalt.bild = bild;
     // Bild und Beschreibung: Produktverantwortliche und Admins direkt, andere Leitungen als Vorschlag

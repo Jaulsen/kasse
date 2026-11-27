@@ -1,4 +1,4 @@
-/* Weihnachtsmarkt-Kasse · App 2.6 · Seiten für Verkauf, Schichten und Standleitung */
+/* Weihnachtsmarkt-Kasse · App 2.7 · Seiten für Verkauf, Schichten und Standleitung */
 'use strict';
 
 /* Vom Server geladene Listen: zuletzt Geladenes sofort zeigen, im Hintergrund aktualisieren */
@@ -469,8 +469,8 @@ P.rundschreiben = {
       erfassen();
       if (!r.titel) return toast('Betreff fehlt');
       if (r.art === 'personen' && !r.auswahl.length) return toast('Personen auswählen');
-      const x = await call({ aktion: 'nachricht_senden', titel: r.titel, text: r.text, ziel: { art: r.art, wert: r.wert }, personen: r.auswahl, bild: r.bild ? r.bild.split(',')[1] : '' }, true);
-      if (x.ok) { ui.rs = null; ui.dirty = false; toast('An ' + x.anzahl + ' Personen gesendet'); go('hinweise', { zurueck: true }); sync(); }
+      aktion('nachricht_senden', { titel: r.titel, text: r.text, ziel: { art: r.art, wert: r.wert }, personen: r.auswahl, bild: r.bild ? r.bild.split(',')[1] : '' });
+      ui.rs = null; ui.dirty = false; toast('Gesendet'); go('hinweise', { zurueck: true });
     }));
   }
 };
@@ -711,22 +711,31 @@ OV.einladen = {
 };
 
 /* ---------- Bons verwalten (Stand): Storno, Korrektur, Nachtrag ---------- */
-/* offene Bons/Stornos zuerst übertragen, sonst zeigt die Liste den alten Stand */
-async function standBonsLaden() {
-  for (let i = 0; i < 40 && (net.syncing || S.queue.some(q => q.typ === 'Bon' || q.typ === 'Storno')) && navigator.onLine !== false; i++) {
-    if (!net.syncing) { try { await sync(); } catch (e) {} if (S.queue.some(q => q.typ === 'Bon' || q.typ === 'Storno')) break; }
-    else await new Promise(r => setTimeout(r, 300));
-  }
-  if (ui.page === 'standbons') return laden('standbons', { aktion: 'bons_liste', stand_id: S.stand_id, datum: ui.bonsTag });
+/* Liste sofort laden; sind noch Bons oder Stornos unterwegs, nach dem Abgleich noch einmal */
+function standBonsLaden() {
+  const tag = ui.bonsTag, sid = S.stand_id;
+  const hol = () => { if (ui.page === 'standbons' && ui.bonsTag === tag && S.stand_id === sid) laden('standbons', { aktion: 'bons_liste', stand_id: sid, datum: tag }).then(() => { if (L.standbons) L.standbons._tag = tag + sid; }); };
+  hol();
+  if (S.queue.some(q => q.typ === 'Bon' || q.typ === 'Storno')) nachAbgleich(hol);
+}
+/* noch nicht übertragene Bons und Stornos dieses Geräts einmischen */
+function bonsMitWartend(liste) {
+  const tag = ui.bonsTag, l = liste.slice(), ids = new Set(l.map(b => b.bon_id));
+  S.queue.filter(q => q.typ === 'Bon' && q.data.stand_id === S.stand_id && !ids.has(q.data.bon_id)).forEach(q => {
+    const d = q.data; if (new Date(d.zeit).toLocaleDateString('sv-SE') !== tag) return;
+    l.push({ bon_id: d.bon_id, zeit: d.zeit, summe: d.summe, status: d.status, art: d.art, positionen: d.positionen, name: S.user.name, wartet: true, pos: d.positionen.map(p => ({ produkt_id: p.produkt_id, menge: p.menge })) });
+  });
+  const st = new Set(S.queue.filter(q => q.typ === 'Storno').map(q => q.data.bon_id));
+  return l.map(b => st.has(b.bon_id) ? Object.assign({}, b, { status: 'storniert' }) : b).sort((a, b) => (b.zeit > a.zeit ? 1 : -1));
 }
 P.standbons = {
   stand: true, key: 'standbons',
   titel: 'Bons verwalten',
-  open: () => { ui.bonsTag = ui.bonsTag || today(); if (L.standbons && L.standbons.datum !== ui.bonsTag) L.standbons = null; standBonsLaden(); },
+  open: () => { ui.bonsTag = ui.bonsTag || today(); if (L.standbons && L.standbons._tag !== ui.bonsTag + S.stand_id) L.standbons = null; standBonsLaden(); },
   body: () => `<div class="formrow"><div class="field"><input type="date" id="bt" value="${esc(ui.bonsTag)}" aria-label="Tag"></div><button class="btn ghost" data-nav data-nt>${I.plus}<span>Nachtrag</span></button></div>` + geladen('standbons', x => {
-    const ok = x.bons.filter(b => b.status === 'ok');
+    const bons = bonsMitWartend(x.bons), ok = bons.filter(b => b.status === 'ok');
     return (rang() >= 3 ? `<div class="stats"><div class="stat"><small>Umsatz</small><b class="num">${eur(ok.reduce((a, b) => a + b.summe, 0))}</b></div><div class="stat"><small>Bons</small><b class="num">${ok.length}</b></div></div>` : '') +
-      (x.bons.length ? x.bons.map(b => bonKarte(b, b.status === 'ok', b.name + (b.hinweis ? ' · ' + b.hinweis + (b.bestaetigt ? ' ✓' : '') : ''))).join('') : listeLeer('Keine Bons'));
+      (bons.length ? bons.map(b => bonKarte(b, b.status === 'ok', b.name + (b.wartet ? ' · wird übertragen' : '') + (b.hinweis ? ' · ' + b.hinweis + (b.bestaetigt ? ' ✓' : '') : ''))).join('') : listeLeer('Keine Bons'));
   }),
   bind: root => {
     root.querySelector('#bt').addEventListener('change', e => { ui.bonsTag = e.target.value; L.standbons = null; render(); standBonsLaden(); });
@@ -737,7 +746,7 @@ P.standbons = {
       standBonsLaden();
     });
     root.querySelectorAll('[data-bkorr]').forEach(x => x.addEventListener('click', () => {
-      const b = ((L.standbons || {}).bons || []).find(y => y.bon_id === x.dataset.bkorr); if (!b) return;
+      const b = bonsMitWartend(((L.standbons || {}).bons || [])).find(y => y.bon_id === x.dataset.bkorr); if (!b) return;
       ui.korr = { bon: Object.assign({ stand_id: S.stand_id }, b), zurueck: 'standbons' }; go('korrigieren');
     }));
   }
@@ -806,8 +815,11 @@ P.abgleich = {
   titel: 'Abgleich',
   body: () => `<div class="stats"><div class="stat"><small>Wartend</small><b class="num">${S.queue.length}</b></div><div class="stat"><small>Letzter Abgleich</small><b class="num" style="font-size:20px">${S.letzterAbgleich ? fmtClock(S.letzterAbgleich) : '–'}</b></div></div>
     ${S.letzterFehler ? `<p class="errlist">${esc(S.letzterFehler)}</p>` : ''}
-    ${(S.fehlerlog || []).length ? `<div class="errlist"><b>Nicht übernommen</b><br>${S.fehlerlog.slice(-6).reverse().map(f => `${fmtClock(f.zeit)} · ${esc(f.fehler)}`).join('<br>')}</div>` : ''}
+    ${(S.fehlerlog || []).length ? `<div class="errlist"><b>Nicht übernommen</b><br>${S.fehlerlog.slice(-6).reverse().map(f => `${fmtTime(f.zeit)} · ${esc(f.fehler)}`).join('<br>')}<br><button class="mini-btn" style="margin:6px 0 0" data-flweg>Liste leeren</button></div>` : ''}
     <p class="hint" style="margin:0">${DEMO ? 'Demo' : 'Gerät ' + esc(S.geraet_id.slice(0, 8))} · ${APP_VERSION}</p>`,
   leiste: () => '<button class="btn wide" data-sync>Jetzt abgleichen</button>',
-  bind: root => { const b = root.querySelector('[data-sync]'); b.addEventListener('click', () => tue(b, async () => { await sync(); render(); })); }
+  bind: root => {
+    const b = root.querySelector('[data-sync]'); b.addEventListener('click', () => tue(b, async () => { await sync(); render(); }));
+    const w = root.querySelector('[data-flweg]'); if (w) w.addEventListener('click', () => { S.fehlerlog = []; save(); render(); });
+  }
 };

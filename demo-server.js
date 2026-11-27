@@ -114,7 +114,7 @@
   window.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: s => ({ setMimeType: () => s }) };
   window.LockService = { getScriptLock: () => ({ waitLock() {}, tryLock() { return true; }, releaseLock() {} }) };
   const cacheMem = {};
-  window.CacheService = { getScriptCache: () => ({ get: k => (k === 'datenstand' && cacheMem[k]) || null, put: (k, v) => { if (k === 'datenstand') cacheMem[k] = v; }, remove: k => { delete cacheMem[k]; } }) };
+  window.CacheService = { getScriptCache: () => ({ get: k => (k in cacheMem ? cacheMem[k] : null), put: (k, v) => { cacheMem[k] = String(v); }, remove: k => { delete cacheMem[k]; } }) };
   window.MailApp = { sendEmail() {} };
   window.Utilities = {
     DigestAlgorithm: { SHA_256: 's', MD5: 'm' }, Charset: { UTF_8: 'u' },
@@ -153,6 +153,7 @@
       for (let i = z.length - 1; i > 0; i--) if (z[i][2] === id) z.splice(i, 1);
       if (rolle === 'Standleitung') store['Stände'].slice(1).forEach(s => z.push(['stand', s[0], id, '', new Date()]));
       if (rolle === 'Marktleitung') store['Märkte'].slice(1).forEach(m => z.push(['markt', m[0], id, '', new Date()]));
+      delete cacheMem.datenstand;
       persist();
     },
     reset() { localStorage.removeItem(KEY); }

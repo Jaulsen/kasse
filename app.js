@@ -6,7 +6,7 @@ const API = (CFG.API_URL || '').trim();
 /* Übungsmodus: die App läuft komplett auf dem Gerät, nichts geht ins Sheet */
 const UEBUNG = (() => { try { return /[?&]uebung=1/.test(location.search) && !!sessionStorage.getItem('wmk-uebung'); } catch (e) { return false; } })();
 const DEMO = !API || UEBUNG;
-const APP_VERSION = '2.6.1';
+const APP_VERSION = '2.7';
 const GRUPPE = 'Stamm', GRUPPEN = 'Stämme';
 const KEY_STATE = UEBUNG ? 'wmk-ueb' : 'wmk-v2', KEY_DATA = UEBUNG ? 'wmk-ueb-stamm' : 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
@@ -62,7 +62,7 @@ let net = { syncing: false, ok: null };
 const OV = {};   // Fenster über der Kasse (Warenkorb, Bezahlen, Info): { titel, body, footer, bind }
 const P = {};    // Seiten: { titel, eltern, body, leiste, bind, open, form }
 
-function save() { S.bons = S.bons.slice(-300); S.fehlerlog = (S.fehlerlog || []).slice(-30); lsSet(KEY_STATE, S); }
+function save() { const alt = Date.now() - 3 * 864e5; S.bons = S.bons.slice(-300); S.fehlerlog = (S.fehlerlog || []).filter(f => new Date(f.zeit).getTime() > alt).slice(-30); lsSet(KEY_STATE, S); }
 function keepDevice() { return { geraet_id: S.geraet_id, queue: S.queue, fehlerlog: S.fehlerlog, letzterAbgleich: S.letzterAbgleich, schrift: S.schrift, kachel: S.kachel, schriftAlt: true, uhr: S.uhr, installGezeigt: S.installGezeigt, unscharf: S.unscharf, rundgang: S.rundgang }; }
 
 const E = () => (D && D.einstellungen) || { schnellbetraege: [0.5, 1, 2, 5, 10, 20, 50], storno_anzahl: 2, abgleich_sekunden: 60, app_titel: 'Weihnachtsmarkt-Kasse', puffer_min: 30 };
@@ -166,9 +166,21 @@ async function api(params, post) {
     throw e;
   } finally { clearTimeout(timer); }
 }
+/* Diese Aufrufe tragen eine Kennung: nach einer Zeitüberschreitung führt der Server sie nicht doppelt aus */
+const EINMALIG = ['code_erzeugen', 'einladung_erstellen', 'nachricht_senden', 'produkt_speichern', 'stand_speichern', 'markt_speichern', 'benutzer_umbenennen'];
+const anfragen = {};
 async function call(params, post) {
-  try { const r = await api(params, post); if (!r.ok) toast(esc(r.fehler === 'NICHT_ANGEMELDET' ? 'Bitte neu anmelden' : r.fehler)); return r; }
+  const k = EINMALIG.includes(params.aktion) ? params.aktion : null;
+  if (k) params = Object.assign({ anfrage_id: anfragen[k] = anfragen[k] || uid() }, params);
+  try { const r = await api(params, post); if (k) delete anfragen[k]; if (!r.ok) toast(esc(r.fehler === 'NICHT_ANGEMELDET' ? 'Bitte neu anmelden' : r.fehler)); return r; }
   catch (e) { toast(net.ok === false ? 'Kein Netz' : esc(e.message)); return { ok: false }; }
+}
+/* fn ausführen, sobald alles aus der Warteschlange übertragen ist */
+function nachAbgleich(fn, n = 0) {
+  if (!net.syncing && !S.queue.length) return fn();
+  if (n > 150) return;
+  if (!net.syncing && S.queue.length && n % 10 === 0) sync();
+  setTimeout(() => nachAbgleich(fn, n + 1), 400);
 }
 
 /* Knopf sperren, solange eine Anfrage läuft: kein doppeltes Auslösen */
@@ -234,11 +246,14 @@ async function sync() {
   if (S.user && !D) render();
   let changed = false, vNachSync = null;
   try {
+    let stamm = null;
     while (S.queue.length) {
       const batch = S.queue.slice(0, batch1(S.queue));
-      const r = await api({ aktion: 'sync', eintraege: batch }, true);
+      // letzte Übertragung: neue Daten gleich mitbringen lassen
+      const letzte = batch.length === S.queue.length && S.user && angemeldet;
+      const r = await api(Object.assign({ aktion: 'sync', eintraege: batch }, letzte ? { mit_stamm: true, stamm_v: D ? D.v || '' : '', stamm_hash: D ? D.hash || '' : '' } : {}), true);
       if (!r.ok) throw new Error(r.fehler || 'Abgleich abgelehnt');
-      vNachSync = r.v || null;
+      vNachSync = r.v || null; stamm = r.stamm || null;
       const done = new Set(r.erledigt || []);
       (r.fehler || []).forEach(f => {
         done.add(f.id); changed = true;
@@ -256,6 +271,14 @@ async function sync() {
     }
     if (!S.user) return;
     if (S.queue.length) throw new Error('Übertragung unvollständig');
+    if (stamm && (stamm.ok || stamm.abgemeldet)) {
+      net.stammZeit = Date.now();
+      const vorher = JSON.stringify([D, S.user, S.zugang]);
+      applyStamm(stamm);
+      changed = changed || vorher !== JSON.stringify([D, S.user, S.zugang]);
+      S.letzterAbgleich = new Date().toISOString(); S.letzterFehler = null; save(); loadImages();
+      return;
+    }
     // Nur Bons übertragen und nichts Neues: Stammdaten nicht erneut holen
     if (vNachSync && D && D.v === vNachSync && angemeldet && Date.now() - (net.stammZeit || 0) < 300000) { S.letzterAbgleich = new Date().toISOString(); S.letzterFehler = null; save(); return; }
     const st = await api({ aktion: 'stammdaten', hash: angemeldet && D ? D.hash || '' : '', v: angemeldet && D ? D.v || '' : '' });
@@ -308,7 +331,7 @@ function autoStand() {
   setTimeout(() => toast('Deine Schicht: ' + esc(s.aufgabe) + ' · ' + esc(standName(s.stand_id))), 50);
 }
 /* Fotos machen Einträge groß: dann weniger je Übertragung */
-function batch1(q) { let n = 0, g = 0; for (const e of q) { g += e.data && e.data.bild ? e.data.bild.length : 300; n++; if (n >= 40 || g > 2500000) break; } return Math.max(1, n); }
+function batch1(q) { let n = 0, g = 0; for (const e of q) { const b = e.data && e.data.bild; g += typeof b === 'string' ? b.length : b && b.data ? b.data.length : 300; n++; if (n >= 40 || g > 2500000) break; } return Math.max(1, n); }
 
 async function loadImages() {
   if (DEMO || !D || loadImages.running) return;
@@ -947,7 +970,7 @@ async function redeem(code) {
 const darfService = () => rang() >= 3;
 function zelleHtml(p, st) {
   if (ui.service) {
-    const src = p.bild ? imgUrl('bilder', p.bild) : '';
+    const src = p._bildUrl || (p.bild ? imgUrl('bilder', p.bild) : '');
     return `<div class="cell" data-cell="${esc(p.produkt_id)}"><button class="tile${p.aktiv === false ? ' out' : ''}" data-p="${esc(p.produkt_id)}" aria-label="${esc(p.name)} bearbeiten">
       <span class="pic" style="background:${esc(kat(p.kategorie).farbe || '#5E6A61')}">${src ? `<img src="${src}" alt="">` : esc(initials(p.name))}${p.aktiv === false ? '<span class="tag">deaktiviert</span>' : ''}</span>
       <span class="tx"><span class="nm">${esc(p.name)}</span><span class="pr num">${eur(p.preis)}</span></span></button></div>`;

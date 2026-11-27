@@ -1,4 +1,4 @@
-/* Weihnachtsmarkt-Kasse · App 2.6 · Stand einrichten, Marktleitung, Admin */
+/* Weihnachtsmarkt-Kasse · App 2.7 · Stand einrichten, Marktleitung, Admin */
 'use strict';
 
 /* ---------- Verantwortliche (Stand und Markt) ---------- */
@@ -90,8 +90,22 @@ P.standedit = {
       seErfassen(root);
       if (!se.name) return toast('Name fehlt');
       if (se.standzeiten.some(z => !z.datum || !z.von || !z.bis || toMin(z.bis) <= toMin(z.von))) return toast('Standzeiten prüfen');
-      const r = await call({ aktion: 'stand_speichern', stand: { stand_id: se.stand_id, markt_id: se.markt_id, name: se.name, kategorien: se.kategorien, standzeiten: se.standzeiten, archiviert: !!archiviert } }, true);
-      if (!r.ok) return;
+      const daten = { stand_id: se.stand_id, markt_id: se.markt_id, name: se.name, kategorien: se.kategorien, standzeiten: se.standzeiten, archiviert: !!archiviert };
+      let r;
+      if (se.stand_id) {
+        // bestehender Stand: im Hintergrund speichern, sofort lokal übernehmen
+        const vorschlag = !darfStand(se.stand_id);
+        aktion('stand_speichern', { stand: daten });
+        if (!vorschlag && D) {
+          if (archiviert) D.staende = (D.staende || []).filter(x => x.stand_id !== se.stand_id);
+          else { const x = (D.staende || []).find(x => x.stand_id === se.stand_id); if (x) Object.assign(x, { name: se.name, kategorien: se.kategorien, standzeiten: se.standzeiten.map(z => Object.assign({}, z)) }); }
+          lsSet(KEY_DATA, D);
+        }
+        r = { ok: true, stand_id: se.stand_id, vorschlag };
+      } else {
+        r = await call({ aktion: 'stand_speichern', stand: daten }, true);
+        if (!r.ok) return;
+      }
       if (r.vorschlag) { ui.confirm = null; toast('Vorschlag an die Verantwortlichen gesendet'); if (se.eltern) go(se.eltern, { zurueck: true }); else home(); return; }
       if (se.personen) {
         se.leitung.filter(i => !se.leitungAlt.includes(i)).forEach(id => aktion('zustaendigkeit', { art: 'stand', ref_id: r.stand_id, ziel_id: id, an: true }));
@@ -100,7 +114,7 @@ P.standedit = {
       ui.confirm = null;
       if (archiviert && S.stand_id === se.stand_id) { S.stand_id = null; S.cart = {}; }
       toast(archiviert ? 'Archiviert' : 'Gespeichert');
-      if (se.eltern) { strukturLaden(); go(se.eltern); } else home();
+      if (se.eltern) { go(se.eltern); nachAbgleich(strukturLaden); } else home();
       sync();
     };
     x('spe', b => tue(b, () => speichern(false)));
@@ -294,7 +308,7 @@ P.produkt = {
   eltern: () => ui.pe && ui.pe.eltern,
   titel: () => ui.pe.produkt_id ? 'Produkt bearbeiten' : rang() >= 3 ? 'Neues Produkt' : 'Produkt vorschlagen',
   body: () => {
-    const p = ui.pe, src = p.neuBild || (p.bild ? imgUrl('bilder', p.bild) : '');
+    const p = ui.pe, src = p.neuBild || p._bildUrl || (p.bild ? imgUrl('bilder', p.bild) : '');
     const ml = rang() >= 3;
     const vm = p.vmodus || (p.verantwortlich_platzhalter && !p.verantwortlich_id ? 'p' : 'b');
     return `${ml ? `<div class="field"><label for="pe-n">Name</label><input id="pe-n" value="${esc(p.name)}"></div>
@@ -345,25 +359,36 @@ P.produkt = {
       erfassen();
       if (!p.name) return toast('Name fehlt');
       if (isNaN(p.preis)) return toast('Preis prüfen');
-      const r = await call({ aktion: 'produkt_speichern',
+      const daten = {
         produkt: Object.assign({ produkt_id: p.produkt_id, name: p.name, kategorie: p.kategorie, preis: p.preis, sortierung: p.sortierung, aktiv: p.aktiv, beschreibung: p.beschreibung, info_dateien: p.info_dateien },
           rang() >= 3 ? { verantwortlich_id: p.verantwortlich_id || '', verantwortlich_platzhalter: p.verantwortlich_platzhalter || '', pfand_id: p.pfand_id || '', suchbegriffe: p.suchbegriffe || '' } : {}),
         bild: p.neuBild ? { data: p.neuBild.split(',')[1] } : null,
-        zusatzdateien: p.neuDateien.map(f => ({ name: f.name, mime: f.mime, data: f.url.split(',')[1] })) }, true);
-      if (!r.ok) return;
+        zusatzdateien: p.neuDateien.map(f => ({ name: f.name, mime: f.mime, data: f.url.split(',')[1] })) };
+      // Mit PDF oder sehr großen Dateien warten, sonst im Hintergrund speichern
+      const gross = p.neuDateien.some(f => f.mime === 'application/pdf') || p.neuDateien.reduce((a, f) => a + f.url.length, 0) > 1500000;
+      const vorschlag = rang() < 3 && (prod(p.produkt_id) || {}).verantwortlich_id !== S.user.benutzer_id && rang() < 4;
+      let r;
+      if (gross) {
+        r = await call(Object.assign({ aktion: 'produkt_speichern' }, daten), true);
+        if (!r.ok) return;
+      } else {
+        if (!p.produkt_id) { daten.produkt.produkt_id = 'P' + Array.from({ length: 8 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join(''); daten.neu = true; }
+        aktion('produkt_speichern', daten);
+        r = { ok: true, produkt_id: daten.produkt.produkt_id, vorschlag };
+      }
       toast(r.vorschlag ? 'Zur Bestätigung gesendet' : 'Gespeichert');
-      // Liste sofort aktualisieren, danach im Hintergrund frisch laden
+      // Liste sofort aktualisieren, nach dem Abgleich frisch laden
       const pl = L.produkte && L.produkte.produkte;
       if (pl && !r.vorschlag && rang() >= 3) {
         const i = pl.findIndex(x => x.produkt_id === r.produkt_id), alt = i >= 0 ? pl[i] : {};
         const pers = (D.personen || []).find(x => x.benutzer_id === p.verantwortlich_id);
         const neu = Object.assign({}, alt, { produkt_id: r.produkt_id, name: p.name, kategorie: p.kategorie, preis: p.preis, aktiv: p.aktiv, beschreibung: p.beschreibung, suchbegriffe: p.suchbegriffe || '', pfand_id: p.pfand_id || '',
           verantwortlich_id: p.verantwortlich_id || '', verantwortlich_platzhalter: p.verantwortlich_platzhalter || '', verantwortlich: pers ? pers.name : alt.verantwortlich || '', bild: r.bild || alt.bild || '', info_dateien: p.info_dateien.concat(p.neuDateien.map(f => f.name)) },
-          rang() >= 4 || i < 0 ? { sortierung: i < 0 && rang() < 4 ? 9999 : p.sortierung } : {});
+          rang() >= 4 || i < 0 ? { sortierung: i < 0 && rang() < 4 ? 9999 : p.sortierung } : {}, p.neuBild ? { _bildUrl: p.neuBild } : {});
         if (i >= 0) pl[i] = neu; else pl.push(neu);
       }
       if (p.neuBild && r.bild) IMG['bilder:' + r.bild] = { url: p.neuBild, t: '' };
-      if (rang() >= 2) produkteLaden();
+      if (rang() >= 2) nachAbgleich(produkteLaden);
       if (p.eltern) go(p.eltern, p.eltern === 'standedit' ? true : undefined); else home();
       sync();
     }));
@@ -438,7 +463,7 @@ P.personen = {
             ${admin && GRUPPEN_L().length ? `<div class="field"><select data-ug aria-label="${GRUPPE}">${optionen((b.gruppe_id ? [] : [['', 'ohne ' + GRUPPE]]).concat(GRUPPEN_L().map(g => [g.gruppe_id, g.name])), b.gruppe_id || '')}</select></div>` : ''}
             ${darf && b.status === 'aktiv' ? `<div class="seg">${rollen.map(r => `<button data-ur="${r}" aria-pressed="${b.rolle === r}">${r.replace('leitung', '-L.')}</button>`).join('')}</div>` : ''}
             ${darf ? `<div class="acts">${b.status === 'gesperrt' || b.status === 'wartet' ? '<button class="mini-btn" data-us="aktiv">Freigeben</button>' : '<button class="mini-btn" data-us="gesperrt">Sperren</button>'}
-              ${admin ? '<input class="pin-in num" id="np" inputmode="numeric" maxlength="6" placeholder="neue PIN" aria-label="neue PIN"><button class="mini-btn" data-pin>PIN setzen</button>' : ''}</div>
+              ${admin ? '<input class="pin-in num" id="np" inputmode="numeric" maxlength="6" placeholder="neue PIN" aria-label="neue PIN"><button class="mini-btn" data-pin>PIN setzen</button><button class="mini-btn" data-umb>Umbenennen</button>' : ''}</div>
               <div class="acts">${b.produkte.length ? `<button class="mini-btn" data-prod>${ui.prodOffen === b.benutzer_id ? 'Produkte ausblenden' : 'Produktverantwortung (' + b.produkte.length + ')'}</button>` : ''}
               ${ui.confirm === 'del' ? `<span>${b.loeschbar ? 'Endgültig löschen?' : 'Entfernen? Umsätze bleiben erhalten.'}</span><button class="btn danger sm" data-del>Ja</button><button class="btn ghost sm" data-nein>Nein</button>`
                 : `<button class="mini-btn danger-t" data-delfrage>${b.loeschbar ? 'Löschen' : 'Entfernen'}</button>`}</div>
@@ -468,6 +493,7 @@ P.personen = {
     const ug = root.querySelector('[data-ug]'); if (ug) ug.addEventListener('change', () => { if (!ug.value) return; person().gruppe_id = ug.value; aendern({ gruppe_id: ug.value }); });
     root.querySelectorAll('[data-us]').forEach(b => b.addEventListener('click', () => aendern({ status: b.dataset.us })));
     const pin = root.querySelector('[data-pin]'); if (pin) pin.addEventListener('click', () => { const v = val(root, '#np'); if (!/^\d{4,6}$/.test(v)) return toast('PIN: 4–6 Ziffern'); aendern({ neue_pin: v }); });
+    const umb = root.querySelector('[data-umb]'); if (umb) umb.addEventListener('click', () => { ui.umb = { id: ui.offen, name: person().name }; go('umbenennen'); });
     const pr = root.querySelector('[data-prod]'); if (pr) pr.addEventListener('click', () => { ui.prodOffen = ui.prodOffen === ui.offen ? null : ui.offen; render(); });
     const df = root.querySelector('[data-delfrage]'); if (df) df.addEventListener('click', () => { ui.confirm = 'del'; render(); });
     const nn = root.querySelector('[data-nein]'); if (nn) nn.addEventListener('click', () => { ui.confirm = null; render(); });
@@ -612,6 +638,25 @@ P.log = {
     return l.length ? `<div class="loglist">${l.map(e => `<div class="logz"><small class="muted">${fmtTime(e.zeit)} · ${esc(e.kategorie)} · ${esc(e.name || '–')}</small><span>${esc(e.text)}</span></div>`).join('')}</div>` : listeLeer('Keine Einträge');
   }),
   bind: root => root.querySelectorAll('[data-lk]').forEach(b => b.addEventListener('click', () => { ui.logKat = b.dataset.lk; render(); }))
+};
+
+/* ---------- Umbenennen (Admin) ---------- */
+OV.umbenennen = {
+  form: true,
+  titel: () => 'Umbenennen',
+  body: () => `<div class="field"><label for="umb-n">Name</label><input id="umb-n" value="${esc(ui.umb.name)}" autocapitalize="words" autocomplete="off"></div>`,
+  footer: () => '<button class="btn ghost" data-close>Abbrechen</button><button class="btn" style="flex:1" data-x="spe">Speichern</button>',
+  bind: root => {
+    const b = root.querySelector('[data-x="spe"]');
+    b.addEventListener('click', () => tue(b, async () => {
+      const name = val(root, '#umb-n').replace(/\s+/g, ' '); if (name.length < 2) return toast('Name fehlt');
+      const r = await call({ aktion: 'benutzer_umbenennen', ziel_id: ui.umb.id, name }, true);
+      if (!r.ok) return;
+      const x = L.personen && L.personen.benutzer.find(y => y.benutzer_id === ui.umb.id); if (x) x.name = r.name;
+      const z = r.zugeordnet || {}, teile = [z.schichten && z.schichten + (z.schichten === 1 ? ' Schicht zur Bestätigung' : ' Schichten zur Bestätigung'), z.produkte && z.produkte + (z.produkte === 1 ? ' Produkt' : ' Produkte'), z.punkte && z.punkte + ' Checklisten-Punkte'].filter(Boolean);
+      ui.overlay = null; render(); toast('Umbenannt' + (teile.length ? ' · zugeordnet: ' + teile.join(', ') : '')); sync();
+    }));
+  }
 };
 
 /* ---------- Rechteübersicht ---------- */
