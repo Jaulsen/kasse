@@ -6,7 +6,7 @@ const API = (CFG.API_URL || '').trim();
 /* Übungsmodus: die App läuft komplett auf dem Gerät, nichts geht ins Sheet */
 const UEBUNG = (() => { try { return /[?&]uebung=1/.test(location.search) && !!sessionStorage.getItem('wmk-uebung'); } catch (e) { return false; } })();
 const DEMO = !API || UEBUNG;
-const APP_VERSION = '2.6';
+const APP_VERSION = '2.6.1';
 const GRUPPE = 'Stamm', GRUPPEN = 'Stämme';
 const KEY_STATE = UEBUNG ? 'wmk-ueb' : 'wmk-v2', KEY_DATA = UEBUNG ? 'wmk-ueb-stamm' : 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
@@ -245,6 +245,11 @@ async function sync() {
         S.fehlerlog.push({ zeit: new Date().toISOString(), typ: f.typ, fehler: f.fehler });
         toast('Nicht gespeichert: ' + esc(f.fehler));
       });
+      // Bestätigtes bis zum nächsten Stammdaten-Abruf behalten, sonst springt die Anzeige kurz zurück
+      S.queue.filter(q => done.has(q.id) && q.typ === 'Verfuegbarkeit' && D).forEach(q => {
+        const l = D.verfuegbarkeit || (D.verfuegbarkeit = []), x = l.find(v => v.stand_id === q.data.stand_id && v.produkt_id === q.data.produkt_id);
+        if (x) x.status = q.data.status; else l.push({ stand_id: q.data.stand_id, produkt_id: q.data.produkt_id, status: q.data.status });
+      });
       S.queue = S.queue.filter(q => !done.has(q.id));
       save();
       if (!done.size) break;
@@ -414,6 +419,9 @@ function render() {
 
   const keep = sel => { const el = app.querySelector(sel); return el ? [el.scrollTop, el.scrollLeft] : null; };
   const pos = { gw: keep('#gw'), chips: keep('.filters .chips'), pb: keep('#pb'), page: render.page, dr: keep('.drawer .dbody'), sb: keep('.sheet .body'), ov: render.ov };
+  // Kassenliste: Position merken, auch über Unterseiten hinweg (z. B. Produkt bearbeiten)
+  if (pos.gw) render.gw = { pos: pos.gw, stand: S.stand_id, service: !!ui.service, kat: ui.kat };
+  else if (render.gw && render.gw.stand === S.stand_id && render.gw.service === !!ui.service && render.gw.kat === ui.kat) pos.gw = render.gw.pos;
 
   let main, bindMain;
   if (ui.page) { [main, bindMain] = seite(ui.page); }

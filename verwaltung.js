@@ -352,7 +352,18 @@ P.produkt = {
         zusatzdateien: p.neuDateien.map(f => ({ name: f.name, mime: f.mime, data: f.url.split(',')[1] })) }, true);
       if (!r.ok) return;
       toast(r.vorschlag ? 'Zur Bestätigung gesendet' : 'Gespeichert');
-      if (rang() >= 2) { L.produkte = null; produkteLaden(); }
+      // Liste sofort aktualisieren, danach im Hintergrund frisch laden
+      const pl = L.produkte && L.produkte.produkte;
+      if (pl && !r.vorschlag && rang() >= 3) {
+        const i = pl.findIndex(x => x.produkt_id === r.produkt_id), alt = i >= 0 ? pl[i] : {};
+        const pers = (D.personen || []).find(x => x.benutzer_id === p.verantwortlich_id);
+        const neu = Object.assign({}, alt, { produkt_id: r.produkt_id, name: p.name, kategorie: p.kategorie, preis: p.preis, aktiv: p.aktiv, beschreibung: p.beschreibung, suchbegriffe: p.suchbegriffe || '', pfand_id: p.pfand_id || '',
+          verantwortlich_id: p.verantwortlich_id || '', verantwortlich_platzhalter: p.verantwortlich_platzhalter || '', verantwortlich: pers ? pers.name : alt.verantwortlich || '', bild: r.bild || alt.bild || '', info_dateien: p.info_dateien.concat(p.neuDateien.map(f => f.name)) },
+          rang() >= 4 || i < 0 ? { sortierung: i < 0 && rang() < 4 ? 9999 : p.sortierung } : {});
+        if (i >= 0) pl[i] = neu; else pl.push(neu);
+      }
+      if (p.neuBild && r.bild) IMG['bilder:' + r.bild] = { url: p.neuBild, t: '' };
+      if (rang() >= 2) produkteLaden();
       if (p.eltern) go(p.eltern, p.eltern === 'standedit' ? true : undefined); else home();
       sync();
     }));
