@@ -612,6 +612,22 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
   .tourbox p { margin: 0; font-size: 16.5px; line-height: 1.35; }
   .tourbox small { color: var(--muted); font-weight: 800; }
   .tourbox b { font-family: var(--font-display); font-size: 22px; }
+
+  /* 2.7.1 Fritteuse */
+  .fritteuse { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: #3B463E; border-radius: 18px; padding: 14px 12px 18px; box-shadow: inset 0 -6px 0 #2A332D; }
+  .frkorb-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .frkorb { width: 100%; aspect-ratio: 3 / 4; border: 4px solid #6E7C72; border-radius: 14px; background: repeating-linear-gradient(0deg, #5C6A60 0 10px, #56645A 10px 12px); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 8px; }
+  .frkorb .frname { font-weight: 800; font-size: 16px; text-align: center; }
+  .frkorb b { font-family: var(--font-display); font-size: 40px; font-weight: 600; }
+  .frkorb.lauf { border-color: #E0A526; }
+  .frkorb.fertig, .frl.fertig { animation: frblink 1s steps(2, start) infinite; }
+  .frkorb.fertig { border-color: #E24B4A; }
+  @keyframes frblink { 0% { background: #C8463D; } 50% { background: #7A2A28; } }
+  .frzul { color: #DDE3DC; font-size: 13px; min-height: 18px; }
+  .frleiste { display: flex; gap: 6px; padding: 6px 10px; background: #3B463E; }
+  .frl { flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 6px; border: 0; border-radius: 8px; padding: 6px 10px; background: #5C6A60; color: #fff; font-weight: 700; font-size: 14px; }
+  .frl span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frl b { font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -621,5 +637,6 @@ pre.rows { background: var(--ink); color: #E8F0E6; border-radius: 12px; padding:
 <script src="app.js"></script>
 <script src="seiten.js"></script>
 <script src="verwaltung.js"></script>
+<script src="fritteuse.js"></script>
 </body>
 </html>

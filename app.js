@@ -6,7 +6,7 @@ const API = (CFG.API_URL || '').trim();
 /* Übungsmodus: die App läuft komplett auf dem Gerät, nichts geht ins Sheet */
 const UEBUNG = (() => { try { return /[?&]uebung=1/.test(location.search) && !!sessionStorage.getItem('wmk-uebung'); } catch (e) { return false; } })();
 const DEMO = !API || UEBUNG;
-const APP_VERSION = '2.7';
+const APP_VERSION = '2.7.1';
 const GRUPPE = 'Stamm', GRUPPEN = 'Stämme';
 const KEY_STATE = UEBUNG ? 'wmk-ueb' : 'wmk-v2', KEY_DATA = UEBUNG ? 'wmk-ueb-stamm' : 'wmk-stamm-v2';
 const ROLLEN = { Helfer: 1, Standleitung: 2, Marktleitung: 3, Admin: 4 };
@@ -463,12 +463,14 @@ function render() {
       ${gedockt ? '' : `<button class="iconbtn${ui.drawer ? ' auf' : ''}" data-burger aria-label="${ui.drawer ? 'Menü schließen' : 'Menü'}" aria-expanded="${ui.drawer}">${ui.drawer ? I.x : I.menu}</button>`}
     </header>
     ${uebungBand()}
+    ${frLeiste()}
     ${abw ? `<div class="banner warn">Uhrzeit am Handy weicht ${abw} Min. ab</div>` : ''}
     ${main}
     ${ui.drawer || gedockt ? drawerHtml(gedockt) : ''}`;
   if (!ui.drawer) ui.drawerShown = false;
   bindMain(app);
   bindUebungBand(app);
+  bindFrLeiste(app);
   app.querySelector('[data-home]').addEventListener('click', () => verlassen(home));
   app.querySelector('[data-ort]').addEventListener('click', () => { const z = ortZiel()[0]; verlassen(() => z ? go(z) : home()); });
   const bu = app.querySelector('[data-burger]');
@@ -988,10 +990,10 @@ function bindZelle(c) {
   const t = c.querySelector('.tile'), pid = t.dataset.p;
   if (ui.service) { t.addEventListener('click', () => openProdukt(pid, null)); return; }
   let timer = null, long = false;
-  t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { long = true; change(pid, -1); }, 480); });
+  t.addEventListener('pointerdown', () => { long = false; timer = setTimeout(() => { if (mehrfingerAktiv()) return; long = true; change(pid, -1); }, 480); });
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => t.addEventListener(ev, () => clearTimeout(timer)));
   t.addEventListener('contextmenu', e => e.preventDefault());
-  t.addEventListener('click', () => { if (long) { long = false; return; } change(pid, +1); });
+  t.addEventListener('click', () => { if (long) { long = false; return; } if (mehrfingerAktiv()) return; change(pid, +1); });
   c.querySelector('[data-info]').addEventListener('click', () => go('info', pid));
   const d = c.querySelector('[data-tdel]'); if (d) d.addEventListener('click', () => { const alt = S.cart[pid] || 0; delete S.cart[pid]; pfandMit(pid, -alt); kasseAktualisieren([pid, pfandVon(pid)]); });
 }
