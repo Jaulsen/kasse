@@ -2,7 +2,7 @@
 window.__GS = (function () {
 /**
  * Weihnachtsmarkt-Kasse – Google-Schnittstelle
- * Version 2.6 · 2026-11-27
+ * Version 2.7 · 2026-11-27
  *
  * Gehört in das Apps-Script-Projekt am Google Sheet (Erweiterungen › Apps Script).
  * Fehlende Tabs und Spalten legt die Schnittstelle selbst an; ein Sheet aus
